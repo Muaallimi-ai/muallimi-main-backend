@@ -1,0 +1,103 @@
+# Muallimi Local Development Infrastructure
+# Phase 0: Foundation and Local Parity
+#
+# This provides local alternatives for all managed cloud dependencies.
+# No Azure or Cloudflare credentials are required.
+#
+# Usage: docker compose -f infra/docker-compose.local.yml up -d
+#
+# Production Equivalent Mapping:
+#   PostgreSQL + pgvector  -> Azure Database for PostgreSQL Flexible Server
+#   MinIO                  -> Azure Blob Storage
+#   RabbitMQ               -> Azure Service Bus
+#   Redis                  -> Azure Cache for Redis
+#   Seq                    -> Azure Application Insights + Log Analytics
+
+services:
+  # ─── Database + Vector Search ───────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: muallimi-postgres
+    environment:
+      POSTGRES_USER: muallimi
+      POSTGRES_PASSWORD: muallimi_local
+      POSTGRES_DB: muallimi_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U muallimi -d muallimi_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Blob Storage (Azure Blob equivalent) ───────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: muallimi-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: muallimi
+      MINIO_ROOT_PASSWORD: muallimi_local
+    ports:
+      - "9000:9000"   # S3/Blob API
+      - "9001:9001"   # Console UI
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Message Queue (Azure Service Bus equivalent) ───────────────────
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: muallimi-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: muallimi
+      RABBITMQ_DEFAULT_PASS: muallimi_local
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+
+  # ─── Cache (Azure Cache for Redis equivalent) ───────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: muallimi-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Observability (Application Insights equivalent) ────────────────
+  seq:
+    image: datalust/seq:latest
+    container_name: muallimi-seq
+    environment:
+      ACCEPT_EULA: "Y"
+    ports:
+      - "5341:5341"   # Ingestion
+      - "8081:80"     # UI
+    volumes:
+      - seq-data:/data
+
+volumes:
+  pgdata:
+  minio-data:
+  rabbitmq-data:
+  redis-data:
+  seq-data:

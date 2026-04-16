@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+*.user
+.env
+appsettings.*.json
+!appsettings.Development.json
+coverage/
