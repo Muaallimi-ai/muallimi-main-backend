@@ -35,7 +35,7 @@ docs/foundation/             # Phase 0 foundation docs
 - **Audit**: Sensitive actions (identity, role, tenant, content approval, billing) must produce audit events
 
 ## Cross-Repo Dependencies
-- **Produces APIs for**: muallimi-frontend (all UI data), muallimi-ai-service (curriculum metadata, student context)
+- **Produces APIs for**: Muaallimi-Platform (all UI data), muallimi-ai-service (curriculum metadata, student context)
 - **Consumes from**: muallimi-ai-service (AI request logs, tutor results), muallimi-document-ingestion (ingestion status, published assets via events/queue)
 - **Queue messages**: Receives content-published events from document-ingestion; sends notification requests
 

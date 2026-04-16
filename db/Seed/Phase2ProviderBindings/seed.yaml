@@ -1,0 +1,62 @@
+# Phase 2 provider adapter bindings — one active binding per capability for
+# environment=local. Every binding has an explicit fallback chain so failure
+# paths are pre-declared. The voice_profile.profile_identifier MUST be
+# distinct from every Phase 1 teacher voice profile identifier (FR-019).
+
+environment: local
+
+bindings:
+  - capability: llm_lightweight
+    active: true
+    provider_identifier: local-ollama-lightweight
+    fallback_chain:
+      - local-ollama-stronger
+      - stub-llm
+    curriculum_scope: null
+
+  - capability: llm_stronger
+    active: true
+    provider_identifier: local-ollama-stronger
+    fallback_chain:
+      - local-ollama-lightweight
+      - stub-llm
+    curriculum_scope: null
+
+  - capability: embedding
+    active: true
+    provider_identifier: phase1-embedding
+    fallback_chain:
+      - stub-embedding
+    curriculum_scope: null
+
+  - capability: stt
+    active: true
+    provider_identifier: local-whisper
+    fallback_chain:
+      - stub-stt
+    curriculum_scope: null
+
+  - capability: tts
+    active: true
+    provider_identifier: local-mozilla-tts
+    fallback_chain:
+      - stub-tts
+    curriculum_scope: null
+
+  - capability: voice_profile
+    active: true
+    # Distinctness check: this profile_identifier must NOT appear in any
+    # Phase 1 TeacherVoiceProfile record. Phase 1 teacher voice profiles
+    # live under `teacher-voice-*`. Enforced at seed time and by
+    # LocalVoiceProfileAdapter runtime check.
+    provider_identifier: ai-tutor-voice-v1
+    fallback_chain: []
+    curriculum_scope: null
+
+# Distinctness assertion — these identifiers are reserved for Phase 1 and
+# MUST NOT match any `voice_profile.provider_identifier` binding above.
+reserved_phase1_teacher_voice_profiles:
+  - teacher-voice-msa-female-v1
+  - teacher-voice-msa-male-v1
+  - teacher-voice-gulf-female-v1
+  - teacher-voice-gulf-male-v1

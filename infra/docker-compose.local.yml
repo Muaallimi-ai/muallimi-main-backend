@@ -26,6 +26,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U muallimi -d muallimi_dev"]
       interval: 5s
@@ -83,12 +84,81 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── Phase 2: Local LLM Lightweight Tier ────────────────────────────
+  # Local LLM container providing the lightweight (fast, cheap) tier behind
+  # the ILlmAdapter (llm_lightweight binding). No managed cloud credentials.
+  ollama-lightweight:
+    image: ollama/ollama:latest
+    container_name: muallimi-ollama-lightweight
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-lightweight-data:/root/.ollama
+    environment:
+      OLLAMA_MODELS: /root/.ollama/models
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -fsS http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Phase 2: Local LLM Stronger Tier ───────────────────────────────
+  # Local LLM container providing the stronger (higher-quality) tier behind
+  # the ILlmAdapter (llm_stronger binding). No managed cloud credentials.
+  ollama-stronger:
+    image: ollama/ollama:latest
+    container_name: muallimi-ollama-stronger
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama-stronger-data:/root/.ollama
+    environment:
+      OLLAMA_MODELS: /root/.ollama/models
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -fsS http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Phase 2: Local Speech-to-Text ──────────────────────────────────
+  # Whisper-compatible local STT service behind ISttAdapter.
+  stt:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: muallimi-stt
+    ports:
+      - "9006:9000"
+    environment:
+      ASR_MODEL: base
+      ASR_ENGINE: openai_whisper
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -fsS http://localhost:9000/docs || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Phase 2: Local Text-to-Speech (AI tutor voice profile) ─────────
+  # Local TTS service behind ITtsAdapter. The AI tutor voice profile
+  # identifier MUST be distinct from every Phase 1 teacher voice profile.
+  tts:
+    image: synesthesiam/mozillatts:latest
+    container_name: muallimi-tts
+    ports:
+      - "5002:5002"
+    environment:
+      TTS_VOICE_PROFILE_ID: ai-tutor-voice-v1
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:5002/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ─── Observability (Application Insights equivalent) ────────────────
   seq:
     image: datalust/seq:latest
     container_name: muallimi-seq
     environment:
       ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_ADMINPASSWORD: "muallimi_local"
     ports:
       - "5341:5341"   # Ingestion
       - "8081:80"     # UI
@@ -101,3 +171,14 @@ volumes:
   rabbitmq-data:
   redis-data:
   seq-data:
+  ollama-lightweight-data:
+  ollama-stronger-data:
+
+# ─── Phase 2: Local bucket / topics / cache namespace reservations ────
+# Bucket `muallimi-ai-tutor-local` (MinIO) — red-team scenario sets and
+#   evaluation artefacts. Provisioned by infra/Phase2/Bootstrap.sh.
+# Queue/broker topics (RabbitMQ) —
+#   `ai.tutor.request.recorded` (ai-service -> main-backend persistence),
+#   `ai.tutor.redteam.run.completed` (ai-service -> main-backend persistence).
+# Cache namespace (Redis) — `ai-tutor:*` (prompt registry hot path,
+#   routing config cache, guardrail rate limiting).

@@ -1,0 +1,17 @@
+{
+  "curriculum_type": "language_school",
+  "grade": "grade_7",
+  "subject": "arabic_language",
+  "academic_year": "2025-2026",
+  "tutor_language": "ar",
+  "sample_lesson": {
+    "chapter": "النحو والصرف",
+    "topic": "الجملة الاسمية",
+    "subtopic": "المبتدأ والخبر",
+    "lesson_title": "أنواع الخبر في الجملة الاسمية",
+    "content_preview": "الخبر هو الجزء الذي يُتمّم معنى الجملة الاسمية مع المبتدأ. وللخبر ثلاثة أنواع: خبر مفرد، وخبر جملة (اسمية أو فعلية)، وخبر شبه جملة (جار ومجرور أو ظرف).",
+    "math_blocks": [],
+    "expected_chunks": 4,
+    "expected_asset_types": ["text_summary", "audio", "visual", "quiz_item", "qa_cache_entry"]
+  }
+}

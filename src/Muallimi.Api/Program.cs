@@ -1,0 +1,1909 @@
+using Muallimi.Api.AiOperations;
+using Muallimi.Api.Audit;
+using Muallimi.Api.Coverage;
+using Muallimi.Api.PromptAudit;
+using Muallimi.Api.ProviderBindings;
+using Muallimi.Api.Publication;
+using Muallimi.Api.RetrievalApi;
+using Muallimi.Api.TutorExposure;
+using Muallimi.Application.Audit;
+using Muallimi.Infrastructure.AiOperations;
+using Muallimi.Infrastructure.BlobStorage;
+using Muallimi.Infrastructure.Persistence;
+using Muallimi.Infrastructure.Queue;
+using Microsoft.EntityFrameworkCore;
+using Minio;
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Serilog
+builder.Host.UseSerilog((context, config) => config
+    .ReadFrom.Configuration(context.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.Seq(context.Configuration["Seq:Url"] ?? "http://localhost:5341"));
+
+// EF Core + PostgreSQL + pgvector
+builder.Services.AddDbContext<MuallimiDbContext>(options =>
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection")
+            ?? "Host=localhost;Port=5432;Database=muallimi_dev;Username=muallimi;Password=muallimi",
+        npgsql => npgsql.UseVector()));
+
+// Application services
+builder.Services.AddSingleton<AuditEventEmitter>();
+
+// US4: Runtime retrieval services
+builder.Services.AddScoped<ChunkRetrievalService>();
+builder.Services.AddScoped<QaCacheLookupService>();
+builder.Services.AddSingleton<LogicalCdnUrlProvider>();
+
+// US5: Asset invalidation handler + fallback mode projection
+builder.Services.AddScoped<AssetInvalidationHandler>();
+builder.Services.AddScoped<FallbackModeProjection>();
+
+// US5: Deprecated chunk cleanup worker (30-day grace period)
+builder.Services.AddHostedService<Muallimi.Api.Curriculum.DeprecatedChunkCleanupWorker>();
+
+// US6: Coverage dashboard aggregator
+builder.Services.AddScoped<CoverageAggregator>();
+
+// ── Phase 2 US1 (T035–T036): Tutor exposure facade + decision record persistence ──
+builder.Services.AddTutorExposureClient(builder.Configuration);
+builder.Services.AddScoped<AiRequestRecordPersistenceHandler>();
+
+// ── Phase 2 US3 (T068): Runtime-configurable routing thresholds ──
+builder.Services.AddRoutingConfigurationServices();
+
+// ── Phase 2 US4 (T078): Prompt registry write endpoints + lifecycle events ──
+builder.Services.AddPromptRegistryServices();
+
+// ── Phase 2 US5 (T090): Provider binding management endpoints + invalidation events ──
+builder.Services.AddProviderBindingServices();
+
+// ── Phase 2 US6 (T101–T103, T106): AI operations query surface + readiness gate ──
+builder.Services.AddAiOperationsQueryServices();
+builder.Services.AddSingleton<AiRequestRecordEventConsumer>(sp =>
+{
+    var consumer = new AiRequestRecordEventConsumer();
+    consumer.OnReceived = async (envelope, ct) =>
+    {
+        using var scope = sp.CreateScope();
+        var handler = scope.ServiceProvider.GetRequiredService<AiRequestRecordPersistenceHandler>();
+        await handler.HandleAsync(envelope, ct);
+    };
+    return consumer;
+});
+
+// ── Cross-repo integration: MinIO blob + RabbitMQ ingestion publisher ──
+builder.Services.Configure<MinioOptions>(builder.Configuration.GetSection("Minio"));
+builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
+
+builder.Services.AddSingleton<Minio.IMinioClient>(sp =>
+{
+    var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<MinioOptions>>().Value;
+    var host = opts.Endpoint.Split(':')[0];
+    var port = opts.Endpoint.Contains(':') ? int.Parse(opts.Endpoint.Split(':')[1]) : 9000;
+    var builderChain = new Minio.MinioClient()
+        .WithEndpoint(host, port)
+        .WithCredentials(opts.AccessKey, opts.SecretKey);
+    if (opts.UseSsl) builderChain = builderChain.WithSSL();
+    return builderChain.Build();
+});
+builder.Services.AddSingleton<ICurriculumBlobStore, MinioCurriculumBlobStore>();
+builder.Services.AddSingleton<IIngestionJobPublisher, RabbitMqIngestionJobPublisher>();
+
+// Swagger
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// CORS (dev: allow the frontend on :3000)
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins("http://localhost:3000")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials());
+});
+
+var app = builder.Build();
+
+// Middleware pipeline
+app.UseCors();
+app.UseCorrelationId();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+// Health check
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "muallimi-main-backend" }));
+
+// ── Curriculum Admin API: Upload & Ingestion ──
+
+app.MapPost("/admin/curriculum/upload", async (
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit,
+    ICurriculumBlobStore blobStore,
+    IIngestionJobPublisher publisher) =>
+{
+    if (!httpContext.Request.HasFormContentType)
+        return Results.BadRequest(new { error = "Multipart form data required." });
+
+    var form = await httpContext.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "A curriculum file is required." });
+
+    var curriculumType = form["curriculum_type"].ToString();
+    var grade = form["grade"].ToString();
+    var subject = form["subject"].ToString();
+    var academicYear = form["academic_year"].ToString();
+    var tutorLanguage = form["tutor_language"].ToString();
+
+    if (string.IsNullOrWhiteSpace(curriculumType) || string.IsNullOrWhiteSpace(grade)
+        || string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(academicYear)
+        || string.IsNullOrWhiteSpace(tutorLanguage))
+    {
+        return Results.BadRequest(new { error = "curriculum_type, grade, subject, academic_year, and tutor_language are required." });
+    }
+
+    // Parse enums
+    if (!Enum.TryParse<Muallimi.Domain.Shared.CurriculumType>(curriculumType, ignoreCase: true, out var ctEnum))
+        return Results.BadRequest(new { error = $"Invalid curriculum_type '{curriculumType}'. Allowed: Moe, LanguageSchool, International." });
+    if (!Enum.TryParse<Muallimi.Domain.Shared.Grade>(grade, ignoreCase: true, out var gradeEnum))
+        return Results.BadRequest(new { error = $"Invalid grade '{grade}'. Allowed: Grade7." });
+    if (!Enum.TryParse<Muallimi.Domain.Shared.Subject>(subject, ignoreCase: true, out var subjectEnum))
+        return Results.BadRequest(new { error = $"Invalid subject '{subject}'. Allowed: Mathematics, Science, ArabicLanguage, EnglishLanguage." });
+    if (!Enum.TryParse<Muallimi.Domain.Shared.TutorLanguage>(tutorLanguage, ignoreCase: true, out var langEnum))
+        return Results.BadRequest(new { error = $"Invalid tutor_language '{tutorLanguage}'. Allowed: Ar, En." });
+
+    // Determine file format from extension
+    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+    Muallimi.Domain.Shared.FileFormat format = ext switch
+    {
+        ".pdf" => Muallimi.Domain.Shared.FileFormat.Pdf,
+        ".docx" => Muallimi.Domain.Shared.FileFormat.Docx,
+        ".html" or ".htm" => Muallimi.Domain.Shared.FileFormat.Html,
+        _ => throw new InvalidOperationException($"Unsupported file format '{ext}'. Accepted: .pdf, .docx, .html")
+    };
+    Muallimi.Domain.Curriculum.CurriculumSource.ValidateFormat(format);
+
+    // Compute content hash
+    using var stream = file.OpenReadStream();
+    using var sha = System.Security.Cryptography.SHA256.Create();
+    var hashBytes = await sha.ComputeHashAsync(stream);
+    var contentHash = Convert.ToHexStringLower(hashBytes);
+    stream.Position = 0;
+
+    // Check for duplicate (same scope + same hash)
+    var existing = await db.CurriculumSources
+        .Where(s => s.CurriculumType == ctEnum && s.Grade == gradeEnum && s.Subject == subjectEnum
+                    && s.TutorLanguage == langEnum && s.AcademicYear == academicYear
+                    && s.ContentHash == contentHash
+                    && s.Status != Muallimi.Domain.Shared.SourceStatus.Replaced)
+        .FirstOrDefaultAsync();
+
+    if (existing is not null)
+        return Results.Conflict(new { error = "Identical file already uploaded for this scope.", source_id = existing.SourceId });
+
+    // Upload file to MinIO — bucket is auto-created on first run.
+    var storageKey = $"curriculum/{ctEnum}/{gradeEnum}/{subjectEnum}/{Guid.NewGuid()}{ext}";
+    await blobStore.UploadAsync(storageKey, stream, file.ContentType ?? "application/octet-stream", httpContext.RequestAborted);
+
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var source = Muallimi.Domain.Curriculum.CurriculumSource.Create(
+        ctEnum, gradeEnum, subjectEnum, academicYear, langEnum, format, storageKey, contentHash, actor);
+
+    var job = Muallimi.Domain.Content.IngestionJob.Create(source.SourceId, correlationId);
+
+    db.CurriculumSources.Add(source);
+    db.IngestionJobs.Add(job);
+    await db.SaveChangesAsync();
+
+    // Publish to the ingestion worker. If this throws, the DB rows remain and
+    // the job can be replayed via /admin/curriculum/jobs/republish.
+    await publisher.PublishAsync(new IngestionMessage(
+        JobId: job.JobId,
+        SourceId: source.SourceId,
+        StorageKey: storageKey,
+        CurriculumType: ctEnum.ToString(),
+        Grade: gradeEnum.ToString(),
+        Subject: subjectEnum.ToString(),
+        TutorLanguage: langEnum.ToString(),
+        AcademicYear: academicYear,
+        FileFormat: format.ToString(),
+        ContentHash: contentHash,
+        CorrelationId: correlationId),
+        httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "upload",
+        TargetType = "CurriculumSource",
+        TargetId = source.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Created($"/admin/curriculum/jobs/{job.JobId}", new
+    {
+        source_id = source.SourceId,
+        job_id = job.JobId,
+        status = job.Status.ToString(),
+        correlation_id = correlationId
+    });
+})
+.WithName("UploadCurriculum")
+.WithTags("Curriculum")
+.DisableAntiforgery();
+
+// Re-publish queued ingestion jobs that never made it onto the bus
+// (e.g. uploads that landed before the publisher was wired, or after a
+// transient Rabbit outage). Idempotent — safe to call repeatedly.
+app.MapPost("/admin/curriculum/jobs/republish", async (
+    MuallimiDbContext db,
+    IIngestionJobPublisher publisher,
+    HttpContext httpContext) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+
+    var orphans = await db.IngestionJobs
+        .Where(j => j.Status == Muallimi.Domain.Shared.IngestionJobStatus.Queued)
+        .Join(db.CurriculumSources, j => j.SourceId, s => s.SourceId, (j, s) => new { Job = j, Source = s })
+        .ToListAsync();
+
+    var republished = new List<Guid>();
+    foreach (var row in orphans)
+    {
+        await publisher.PublishAsync(new IngestionMessage(
+            JobId: row.Job.JobId,
+            SourceId: row.Source.SourceId,
+            StorageKey: row.Source.StorageKey,
+            CurriculumType: row.Source.CurriculumType.ToString(),
+            Grade: row.Source.Grade.ToString(),
+            Subject: row.Source.Subject.ToString(),
+            TutorLanguage: row.Source.TutorLanguage.ToString(),
+            AcademicYear: row.Source.AcademicYear,
+            FileFormat: row.Source.FileFormat.ToString(),
+            ContentHash: row.Source.ContentHash,
+            CorrelationId: row.Job.CorrelationId ?? correlationId),
+            httpContext.RequestAborted);
+        republished.Add(row.Job.JobId);
+    }
+
+    return Results.Ok(new
+    {
+        republished_count = republished.Count,
+        job_ids = republished,
+        correlation_id = correlationId
+    });
+})
+.WithName("RepublishIngestionJobs")
+.WithTags("Curriculum");
+
+// T028: GET ingestion job status
+app.MapGet("/admin/curriculum/jobs/{jobId:guid}", async (Guid jobId, MuallimiDbContext db) =>
+{
+    var job = await db.IngestionJobs.FindAsync(jobId);
+    if (job is null)
+        return Results.NotFound(new { error = "Job not found." });
+
+    return Results.Ok(new
+    {
+        job_id = job.JobId,
+        source_id = job.SourceId,
+        status = job.Status.ToString(),
+        stages = job.Stages,
+        started_at = job.StartedAt,
+        completed_at = job.CompletedAt,
+        error_reason = job.ErrorReason,
+        correlation_id = job.CorrelationId
+    });
+})
+.WithName("GetIngestionJobStatus")
+.WithTags("Curriculum");
+
+// T029: GET curriculum structure tree
+app.MapGet("/admin/curriculum/{sourceId:guid}/structure", async (Guid sourceId, MuallimiDbContext db) =>
+{
+    var structure = await db.CurriculumStructures
+        .Where(s => s.SourceId == sourceId)
+        .OrderByDescending(s => s.ExtractedAt)
+        .FirstOrDefaultAsync();
+
+    if (structure is null)
+        return Results.NotFound(new { error = "Structure not found for this source." });
+
+    return Results.Ok(new
+    {
+        structure_id = structure.StructureId,
+        source_id = structure.SourceId,
+        nodes = structure.Nodes,
+        extracted_at = structure.ExtractedAt
+    });
+})
+.WithName("GetCurriculumStructure")
+.WithTags("Curriculum");
+
+// T029: GET lesson detail with chunks
+app.MapGet("/admin/curriculum/{sourceId:guid}/structure/{lessonId:guid}", async (
+    Guid sourceId, Guid lessonId, MuallimiDbContext db) =>
+{
+    var lesson = await db.Lessons.FindAsync(lessonId);
+    if (lesson is null)
+        return Results.NotFound(new { error = "Lesson not found." });
+
+    var chunks = await db.ContentChunks
+        .Where(c => c.LessonId == lessonId)
+        .OrderBy(c => c.Sequence)
+        .Select(c => new
+        {
+            chunk_id = c.ChunkId,
+            sequence = c.Sequence,
+            text = c.Text,
+            math_blocks = c.MathBlocks,
+            token_count = c.TokenCount,
+            source_refs = c.SourceRefs,
+            status = c.Status.ToString()
+        })
+        .ToListAsync();
+
+    return Results.Ok(new
+    {
+        lesson_id = lesson.LessonId,
+        path = lesson.Path,
+        curriculum_type = lesson.CurriculumType.ToString(),
+        grade = lesson.Grade.ToString(),
+        subject = lesson.Subject.ToString(),
+        tutor_language = lesson.TutorLanguage.ToString(),
+        content_hash = lesson.ContentHash,
+        status = lesson.Status.ToString(),
+        chunks
+    });
+})
+.WithName("GetLessonDetail")
+.WithTags("Curriculum");
+
+// ── T040: Internal Ingestion Result Handler ──
+// Called by document-ingestion worker to report job status updates
+
+app.MapPut("/internal/ingestion/jobs/{jobId:guid}/status", async (
+    Guid jobId, IngestionJobStatusUpdate update, MuallimiDbContext db) =>
+{
+    var job = await db.IngestionJobs.FindAsync(jobId);
+    if (job is null)
+        return Results.NotFound();
+
+    var stagesJson = System.Text.Json.JsonSerializer.Serialize(update.Stages);
+    job.UpdateStage(stagesJson);
+
+    if (update.Status == "processing" && job.Status == Muallimi.Domain.Shared.IngestionJobStatus.Queued)
+        job.MarkProcessing();
+    else if (update.Status == "completed")
+        job.MarkCompleted();
+    else if (update.Status == "failed")
+        job.MarkFailed(update.ErrorReason ?? "Unknown error");
+
+    // Also update the source status
+    var source = await db.CurriculumSources.FindAsync(job.SourceId);
+    if (source is not null)
+    {
+        if (update.Status == "processing" && source.Status == Muallimi.Domain.Shared.SourceStatus.Received)
+            source.MarkIngesting();
+        else if (update.Status == "completed")
+            source.MarkIndexed();
+        else if (update.Status == "failed")
+            source.MarkFailed(update.ErrorReason ?? "Unknown error");
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok();
+})
+.WithName("UpdateIngestionJobStatus")
+.WithTags("Internal");
+
+// Called by document-ingestion worker to report full ingestion results
+app.MapPost("/internal/ingestion/results", async (
+    IngestionResultPayload payload, MuallimiDbContext db, AuditEventEmitter audit) =>
+{
+    // Create the curriculum structure
+    var structure = Muallimi.Domain.Curriculum.CurriculumStructure.Create(
+        payload.SourceId, payload.StructureNodes);
+    db.CurriculumStructures.Add(structure);
+
+    // Look up the source to get scope metadata
+    var source = await db.CurriculumSources.FindAsync(payload.SourceId);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    // Create lessons and chunks
+    foreach (var lessonData in payload.Lessons)
+    {
+        var lesson = Muallimi.Domain.Curriculum.Lesson.Create(
+            structure.StructureId,
+            source.CurriculumType,
+            source.Grade,
+            source.Subject,
+            source.TutorLanguage,
+            lessonData.Path);
+
+        lesson.SetContentHash(lessonData.ContentHash);
+        lesson.MarkIngested("Initial ingestion");
+        db.Lessons.Add(lesson);
+
+        foreach (var chunkData in lessonData.Chunks)
+        {
+            var chunk = Muallimi.Domain.Curriculum.ContentChunk.Create(
+                lesson.LessonId,
+                chunkData.Sequence,
+                chunkData.Text,
+                chunkData.TokenCount,
+                chunkData.OverlapWithPrevious,
+                chunkData.SourceRefs,
+                chunkData.Metadata,
+                chunkData.MathBlocks);
+
+            if (chunkData.Embedding is not null && chunkData.EmbeddingModelVersion is not null)
+            {
+                chunk.SetEmbedding(chunkData.Embedding, chunkData.EmbeddingModelVersion);
+            }
+
+            chunk.Activate();
+            db.ContentChunks.Add(chunk);
+        }
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "ingestion-completed",
+        TargetType = "CurriculumSource",
+        TargetId = payload.SourceId.ToString(),
+        ActorId = "ingestion-worker",
+        TenantId = "system",
+        Outcome = "succeeded",
+        CorrelationId = payload.CorrelationId
+    });
+
+    return Results.Ok(new
+    {
+        structure_id = structure.StructureId,
+        lesson_count = payload.Lessons.Count,
+        chunk_count = payload.Lessons.Sum(l => l.Chunks.Count)
+    });
+})
+.WithName("ReceiveIngestionResults")
+.WithTags("Internal");
+
+// ── T051: Asset Generation Trigger Endpoints ──
+
+// POST /admin/content/generate/batch — trigger generation across a scope
+app.MapPost("/admin/content/generate/batch", async (
+    HttpContext httpContext,
+    GenerationBatchRequest request,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    // Find all ingested lessons in the requested scope
+    var query = db.Lessons
+        .Where(l => l.Status == Muallimi.Domain.Shared.LessonStatus.Ingested);
+
+    if (request.CurriculumType is not null &&
+        Enum.TryParse<Muallimi.Domain.Shared.CurriculumType>(request.CurriculumType, ignoreCase: true, out var ct))
+        query = query.Where(l => l.CurriculumType == ct);
+
+    if (request.Grade is not null &&
+        Enum.TryParse<Muallimi.Domain.Shared.Grade>(request.Grade, ignoreCase: true, out var gr))
+        query = query.Where(l => l.Grade == gr);
+
+    if (request.Subject is not null &&
+        Enum.TryParse<Muallimi.Domain.Shared.Subject>(request.Subject, ignoreCase: true, out var sub))
+        query = query.Where(l => l.Subject == sub);
+
+    var lessons = await query.ToListAsync();
+    if (lessons.Count == 0)
+        return Results.BadRequest(new { error = "No eligible lessons found for the given scope." });
+
+    var defaultScope = System.Text.Json.JsonSerializer.Serialize(
+        new[] { "TextSummary", "Audio", "Visual", "QuizItem", "QaCacheEntry" });
+
+    var jobs = new List<Muallimi.Domain.Content.GenerationJob>();
+    foreach (var lesson in lessons)
+    {
+        // Check if an active generation job already exists for this lesson
+        var existingJob = await db.GenerationJobs
+            .Where(j => j.LessonId == lesson.LessonId
+                && (j.Status == Muallimi.Domain.Shared.GenerationJobStatus.Queued
+                    || j.Status == Muallimi.Domain.Shared.GenerationJobStatus.Running))
+            .FirstOrDefaultAsync();
+
+        if (existingJob is not null) continue; // idempotency — skip already-queued lessons
+
+        // Also skip lessons that already have all approved assets
+        var approvedCount = await db.GeneratedAssets
+            .Where(a => a.LessonId == lesson.LessonId && a.Status == Muallimi.Domain.Shared.AssetStatus.Approved)
+            .CountAsync();
+        if (approvedCount >= 5) continue; // all 5 asset types already approved
+
+        var job = Muallimi.Domain.Content.GenerationJob.Create(lesson.LessonId, defaultScope, correlationId);
+        lesson.MarkGenerating();
+        db.GenerationJobs.Add(job);
+        jobs.Add(job);
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "content",
+        Action = "generation-batch-triggered",
+        TargetType = "GenerationJob",
+        TargetId = $"batch:{jobs.Count}",
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Created("/admin/content/jobs", new
+    {
+        jobs_created = jobs.Count,
+        job_ids = jobs.Select(j => j.JobId),
+        correlation_id = correlationId
+    });
+})
+.WithName("GenerateBatch")
+.WithTags("Content");
+
+// POST /admin/content/generate/{lessonId} — trigger generation for a single lesson
+app.MapPost("/admin/content/generate/{lessonId:guid}", async (
+    Guid lessonId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var lesson = await db.Lessons.FindAsync(lessonId);
+    if (lesson is null)
+        return Results.NotFound(new { error = "Lesson not found." });
+
+    if (lesson.Status != Muallimi.Domain.Shared.LessonStatus.Ingested)
+        return Results.BadRequest(new { error = $"Lesson is in '{lesson.Status}' status; must be 'Ingested' to trigger generation." });
+
+    // Idempotency — check for existing active generation job
+    var existingJob = await db.GenerationJobs
+        .Where(j => j.LessonId == lessonId
+            && (j.Status == Muallimi.Domain.Shared.GenerationJobStatus.Queued
+                || j.Status == Muallimi.Domain.Shared.GenerationJobStatus.Running))
+        .FirstOrDefaultAsync();
+
+    if (existingJob is not null)
+        return Results.Conflict(new { error = "A generation job is already active for this lesson.", job_id = existingJob.JobId });
+
+    var scope = System.Text.Json.JsonSerializer.Serialize(
+        new[] { "TextSummary", "Audio", "Visual", "QuizItem", "QaCacheEntry" });
+
+    var job = Muallimi.Domain.Content.GenerationJob.Create(lessonId, scope, correlationId);
+    lesson.MarkGenerating();
+
+    db.GenerationJobs.Add(job);
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "content",
+        Action = "generation-triggered",
+        TargetType = "GenerationJob",
+        TargetId = job.JobId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Created($"/admin/content/jobs/{job.JobId}", new
+    {
+        job_id = job.JobId,
+        lesson_id = lessonId,
+        status = job.Status.ToString(),
+        correlation_id = correlationId
+    });
+})
+.WithName("GenerateSingleLesson")
+.WithTags("Content");
+
+// T052: GET /admin/content/jobs/{jobId} — generation job status
+app.MapGet("/admin/content/jobs/{jobId:guid}", async (Guid jobId, MuallimiDbContext db) =>
+{
+    var job = await db.GenerationJobs.FindAsync(jobId);
+    if (job is null)
+        return Results.NotFound(new { error = "Generation job not found." });
+
+    // Get associated assets for this job
+    var assets = await db.GeneratedAssets
+        .Where(a => a.LessonId == job.LessonId)
+        .Select(a => new
+        {
+            asset_id = a.AssetId,
+            asset_type = a.AssetType.ToString(),
+            visual_format = a.VisualFormat != null ? a.VisualFormat.ToString() : null,
+            status = a.Status.ToString(),
+            storage_key = a.StorageKey,
+            produced_at = a.ProducedAt
+        })
+        .ToListAsync();
+
+    return Results.Ok(new
+    {
+        job_id = job.JobId,
+        lesson_id = job.LessonId,
+        scope = job.Scope,
+        stages = job.Stages,
+        status = job.Status.ToString(),
+        attempts = job.Attempts,
+        started_at = job.StartedAt,
+        completed_at = job.CompletedAt,
+        error_reason = job.ErrorReason,
+        cost_summary = job.CostSummary,
+        correlation_id = job.CorrelationId,
+        assets
+    });
+})
+.WithName("GetGenerationJobStatus")
+.WithTags("Content");
+
+// ── T063: Internal Generation Result Handler ──
+// Called by document-ingestion worker to report generation results
+
+app.MapPut("/internal/generation/jobs/{jobId:guid}/status", async (
+    Guid jobId, GenerationJobStatusUpdate update, MuallimiDbContext db) =>
+{
+    var job = await db.GenerationJobs.FindAsync(jobId);
+    if (job is null)
+        return Results.NotFound();
+
+    if (update.Stages is not null)
+        job.UpdateStages(System.Text.Json.JsonSerializer.Serialize(update.Stages));
+
+    if (update.Status == "running" && job.Status == Muallimi.Domain.Shared.GenerationJobStatus.Queued)
+        job.MarkRunning();
+    else if (update.Status == "completed")
+        job.MarkCompleted(update.CostSummary);
+    else if (update.Status == "failed")
+        job.MarkFailed(update.ErrorReason ?? "Unknown error");
+    else if (update.Status == "partial_failed")
+        job.MarkPartialFailed(update.ErrorReason ?? "Partial failure", update.CostSummary);
+
+    await db.SaveChangesAsync();
+    return Results.Ok();
+})
+.WithName("UpdateGenerationJobStatus")
+.WithTags("Internal");
+
+app.MapPost("/internal/generation/results", async (
+    GenerationResultPayload payload, MuallimiDbContext db, AuditEventEmitter audit) =>
+{
+    var job = await db.GenerationJobs.FindAsync(payload.JobId);
+    if (job is null)
+        return Results.NotFound(new { error = "Generation job not found." });
+
+    var lesson = await db.Lessons.FindAsync(job.LessonId);
+
+    foreach (var assetData in payload.Assets)
+    {
+        if (!Enum.TryParse<Muallimi.Domain.Shared.AssetType>(assetData.AssetType, ignoreCase: true, out var assetType))
+            continue;
+
+        // Check for idempotency — don't create duplicate assets
+        var existing = await db.GeneratedAssets
+            .Where(a => a.LessonId == job.LessonId && a.AssetType == assetType
+                && a.Version == assetData.Version)
+            .FirstOrDefaultAsync();
+
+        if (existing is not null) continue;
+
+        Muallimi.Domain.Shared.VisualFormat? vfParsed = null;
+        if (assetData.VisualFormat is not null &&
+            Enum.TryParse<Muallimi.Domain.Shared.VisualFormat>(assetData.VisualFormat, ignoreCase: true, out var vfResult))
+            vfParsed = vfResult;
+
+        var asset = Muallimi.Domain.Content.GeneratedAsset.Create(
+            job.LessonId,
+            assetType,
+            vfParsed,
+            assetData.Language,
+            assetData.Version,
+            assetData.ProducedBy);
+
+        asset.SetStorageKey(assetData.StorageKey);
+        if (assetData.Transcript is not null)
+            asset.SetTranscript(assetData.Transcript);
+        if (assetData.Cost is not null)
+            asset.SetCost(assetData.Cost);
+
+        // Assets arrive in Producing status from the worker; advance through auto-validation
+        asset.MarkProducing();
+
+        db.GeneratedAssets.Add(asset);
+    }
+
+    // Record format decision if present
+    if (payload.FormatDecision is not null)
+    {
+        if (Enum.TryParse<Muallimi.Domain.Shared.VisualFormat>(
+            payload.FormatDecision.SelectedFormat, ignoreCase: true, out var fmt))
+        {
+            var decision = Muallimi.Domain.Content.FormatDecision.Create(
+                job.LessonId, fmt,
+                payload.FormatDecision.RuleTriggered,
+                payload.FormatDecision.LlmRefinement);
+            db.FormatDecisions.Add(decision);
+        }
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "content",
+        Action = "generation-results-received",
+        TargetType = "GenerationJob",
+        TargetId = payload.JobId.ToString(),
+        ActorId = "generation-worker",
+        TenantId = "system",
+        Outcome = "succeeded",
+        CorrelationId = payload.CorrelationId
+    });
+
+    return Results.Ok(new
+    {
+        job_id = payload.JobId,
+        assets_created = payload.Assets.Count
+    });
+})
+.WithName("ReceiveGenerationResults")
+.WithTags("Internal");
+
+// ── T078: Internal Auto-Validation Result Handler ──
+// Called by document-ingestion worker after Tier 1 auto-validation completes
+
+app.MapPost("/internal/validation/results", async (
+    AutoValidationPayload payload, MuallimiDbContext db, AuditEventEmitter audit) =>
+{
+    if (!Guid.TryParse(payload.AssetId, out var assetId))
+        return Results.BadRequest(new { error = "Invalid asset_id." });
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    // Parse decision
+    var decision = payload.Decision?.ToLowerInvariant() == "passed"
+        ? Muallimi.Domain.Shared.AutoValidationDecision.Passed
+        : Muallimi.Domain.Shared.AutoValidationDecision.Failed;
+
+    // Create AutoValidationResult
+    var result = Muallimi.Domain.Content.AutoValidationResult.Create(
+        assetId,
+        payload.Checks ?? "{}",
+        payload.GroundingEvidence ?? "[]",
+        payload.ArabicQuality,
+        payload.Rendering,
+        payload.NarrationSync,
+        payload.Accessibility,
+        payload.Alignment,
+        decision);
+
+    db.AutoValidationResults.Add(result);
+
+    // Transition asset state based on decision
+    if (asset.Status == Muallimi.Domain.Shared.AssetStatus.Producing)
+        asset.MarkAutoValidating();
+
+    if (decision == Muallimi.Domain.Shared.AutoValidationDecision.Passed)
+    {
+        asset.MarkPendingAdminReview();
+
+        // Record auto-validation decision
+        var autoDecision = Muallimi.Domain.Review.ReviewDecision.CreateAutoValidation(
+            assetId, Muallimi.Domain.Shared.ReviewOutcome.Approved, payload.CorrelationId);
+        db.ReviewDecisions.Add(autoDecision);
+    }
+    else
+    {
+        asset.MarkAutoFailed();
+
+        audit.Emit(new AuditEvent
+        {
+            EventCategory = "review",
+            Action = "auto-validation-failed",
+            TargetType = "GeneratedAsset",
+            TargetId = assetId.ToString(),
+            ActorId = "system",
+            TenantId = "system",
+            Outcome = "failed",
+            CorrelationId = payload.CorrelationId ?? ""
+        });
+    }
+
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new
+    {
+        result_id = result.ResultId,
+        asset_id = assetId,
+        decision = decision.ToString(),
+        asset_status = asset.Status.ToString()
+    });
+})
+.WithName("ReceiveAutoValidationResult")
+.WithTags("Internal");
+
+// ── T079: Admin Review Queue Endpoints ──
+
+// GET /admin/review/queue — admin review queue with filters and queue-age
+app.MapGet("/admin/review/queue", async (
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    string? curriculumType,
+    string? grade,
+    string? subject,
+    string? assetType,
+    int page = 1,
+    int pageSize = 20) =>
+{
+    var query = db.GeneratedAssets
+        .Where(a => a.Status == Muallimi.Domain.Shared.AssetStatus.PendingAdminReview);
+
+    // Apply filters via lesson join if needed
+    if (!string.IsNullOrEmpty(curriculumType) || !string.IsNullOrEmpty(grade) || !string.IsNullOrEmpty(subject))
+    {
+        var lessonQuery = db.Lessons.AsQueryable();
+        if (!string.IsNullOrEmpty(curriculumType) &&
+            Enum.TryParse<Muallimi.Domain.Shared.CurriculumType>(curriculumType, ignoreCase: true, out var ct))
+            lessonQuery = lessonQuery.Where(l => l.CurriculumType == ct);
+        if (!string.IsNullOrEmpty(grade) &&
+            Enum.TryParse<Muallimi.Domain.Shared.Grade>(grade, ignoreCase: true, out var gr))
+            lessonQuery = lessonQuery.Where(l => l.Grade == gr);
+        if (!string.IsNullOrEmpty(subject) &&
+            Enum.TryParse<Muallimi.Domain.Shared.Subject>(subject, ignoreCase: true, out var sub))
+            lessonQuery = lessonQuery.Where(l => l.Subject == sub);
+
+        var lessonIds = await lessonQuery.Select(l => l.LessonId).ToListAsync();
+        query = query.Where(a => lessonIds.Contains(a.LessonId));
+    }
+
+    if (!string.IsNullOrEmpty(assetType) &&
+        Enum.TryParse<Muallimi.Domain.Shared.AssetType>(assetType, ignoreCase: true, out var at))
+        query = query.Where(a => a.AssetType == at);
+
+    var total = await query.CountAsync();
+    var items = await query
+        .OrderBy(a => a.ProducedAt)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize)
+        .Select(a => new
+        {
+            asset_id = a.AssetId,
+            lesson_id = a.LessonId,
+            asset_type = a.AssetType.ToString(),
+            visual_format = a.VisualFormat != null ? a.VisualFormat.ToString() : null,
+            status = a.Status.ToString(),
+            produced_at = a.ProducedAt,
+            queue_age_hours = Math.Round((DateTime.UtcNow - a.ProducedAt).TotalHours, 1),
+            language = a.Language
+        })
+        .ToListAsync();
+
+    return Results.Ok(new { total, page, page_size = pageSize, items });
+})
+.WithName("GetAdminReviewQueue")
+.WithTags("Review");
+
+// GET /admin/review/{assetId} — full asset detail with validation results and source chunks
+app.MapGet("/admin/review/{assetId:guid}", async (Guid assetId, MuallimiDbContext db) =>
+{
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    var validationResult = await db.AutoValidationResults
+        .Where(r => r.AssetId == assetId)
+        .OrderByDescending(r => r.ValidatedAt)
+        .FirstOrDefaultAsync();
+
+    var chunks = await db.ContentChunks
+        .Where(c => c.LessonId == asset.LessonId)
+        .OrderBy(c => c.Sequence)
+        .Select(c => new { chunk_id = c.ChunkId, text = c.Text, source_refs = c.SourceRefs })
+        .ToListAsync();
+
+    var decisions = await db.ReviewDecisions
+        .Where(d => d.AssetId == assetId)
+        .OrderByDescending(d => d.DecidedAt)
+        .Select(d => new
+        {
+            decision_id = d.DecisionId,
+            tier = d.Tier.ToString(),
+            actor_id = d.ActorId,
+            outcome = d.Outcome.ToString(),
+            scope = d.Scope,
+            fix_instruction = d.FixInstruction,
+            decided_at = d.DecidedAt
+        })
+        .ToListAsync();
+
+    return Results.Ok(new
+    {
+        asset_id = asset.AssetId,
+        lesson_id = asset.LessonId,
+        asset_type = asset.AssetType.ToString(),
+        visual_format = asset.VisualFormat?.ToString(),
+        status = asset.Status.ToString(),
+        storage_key = asset.StorageKey,
+        transcript = asset.Transcript,
+        language = asset.Language,
+        version = asset.Version,
+        produced_at = asset.ProducedAt,
+        auto_validation = validationResult is not null ? new
+        {
+            result_id = validationResult.ResultId,
+            checks = validationResult.Checks,
+            decision = validationResult.Decision.ToString(),
+            validated_at = validationResult.ValidatedAt
+        } : null,
+        source_chunks = chunks,
+        review_decisions = decisions
+    });
+})
+.WithName("GetAssetDetail")
+.WithTags("Review");
+
+// ── T080: POST /admin/review/{assetId}/regenerate — request regeneration with stage scope ──
+
+app.MapPost("/admin/review/{assetId:guid}/regenerate", async (
+    Guid assetId,
+    RegenerateRequest? request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    // Admin can regenerate from pending_admin_review (sends back to queue)
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingAdminReview
+        && asset.Status != Muallimi.Domain.Shared.AssetStatus.AutoFailed)
+        return Results.BadRequest(new { error = $"Cannot regenerate from status '{asset.Status}'." });
+
+    // Reset for regeneration
+    asset.ResetForRegeneration(asset.Version + 1);
+
+    // Record regeneration request as a decision
+    var decision = Muallimi.Domain.Review.ReviewDecision.CreateAdminDecision(
+        assetId, Muallimi.Domain.Shared.ReviewOutcome.Rejected, actor, correlationId);
+    db.ReviewDecisions.Add(decision);
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "regeneration-requested",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId,
+        Reason = request?.Stage
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = assetId,
+        new_status = asset.Status.ToString(),
+        new_version = asset.Version,
+        stage = request?.Stage
+    });
+})
+.WithName("RegenerateAsset")
+.WithTags("Review");
+
+// ── T081: PATCH /admin/review/{assetId}/submit — submit asset to expert review ──
+
+app.MapMethods("/admin/review/{assetId:guid}/submit", new[] { "PATCH" }, async (
+    Guid assetId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingAdminReview)
+        return Results.BadRequest(new { error = $"Cannot submit to expert review from status '{asset.Status}'." });
+
+    asset.MarkPendingExpertReview();
+
+    var decision = Muallimi.Domain.Review.ReviewDecision.CreateAdminDecision(
+        assetId, Muallimi.Domain.Shared.ReviewOutcome.Approved, actor, correlationId);
+    db.ReviewDecisions.Add(decision);
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "submitted-to-expert",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = assetId,
+        status = asset.Status.ToString(),
+        submitted_at = DateTime.UtcNow
+    });
+})
+.WithName("SubmitToExpert")
+.WithTags("Review");
+
+// POST /admin/review/batch/submit — submit multiple assets to expert review
+app.MapPost("/admin/review/batch/submit", async (
+    BatchSubmitRequest request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var submitted = new List<Guid>();
+    var errors = new List<object>();
+
+    foreach (var id in request.AssetIds)
+    {
+        var asset = await db.GeneratedAssets.FindAsync(id);
+        if (asset is null)
+        {
+            errors.Add(new { asset_id = id, error = "Not found." });
+            continue;
+        }
+        if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingAdminReview)
+        {
+            errors.Add(new { asset_id = id, error = $"Invalid status: {asset.Status}." });
+            continue;
+        }
+
+        asset.MarkPendingExpertReview();
+        var decision = Muallimi.Domain.Review.ReviewDecision.CreateAdminDecision(
+            id, Muallimi.Domain.Shared.ReviewOutcome.Approved, actor, correlationId);
+        db.ReviewDecisions.Add(decision);
+        submitted.Add(id);
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "batch-submitted-to-expert",
+        TargetType = "GeneratedAsset",
+        TargetId = $"batch:{submitted.Count}",
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { submitted_count = submitted.Count, submitted, errors });
+})
+.WithName("BatchSubmitToExpert")
+.WithTags("Review");
+
+// ── T082: Expert Assignment Endpoints ──
+
+// POST /admin/review/{assetId}/assign — assign to a subject expert
+app.MapPost("/admin/review/{assetId:guid}/assign", async (
+    Guid assetId,
+    AssignExpertRequest request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingExpertReview)
+        return Results.BadRequest(new { error = $"Cannot assign expert from status '{asset.Status}'." });
+
+    // Look up lesson to get subject for expert-subject match
+    var lesson = await db.Lessons.FindAsync(asset.LessonId);
+    if (lesson is null)
+        return Results.NotFound(new { error = "Lesson not found." });
+
+    // Parse expert subject (for validation)
+    if (!Enum.TryParse<Muallimi.Domain.Shared.Subject>(request.ExpertSubject, ignoreCase: true, out var expertSubject))
+        return Results.BadRequest(new { error = $"Invalid expert_subject '{request.ExpertSubject}'." });
+
+    Muallimi.Domain.Review.ReviewAssignment assignment;
+    try
+    {
+        assignment = Muallimi.Domain.Review.ReviewAssignment.CreateExpertAssignment(
+            assetId, request.ExpertId, actor,
+            lesson.Subject, expertSubject, asset.AssetType);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
+    db.ReviewAssignments.Add(assignment);
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "expert-assigned",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Created($"/admin/review/expert/{request.ExpertId}/queue", new
+    {
+        assignment_id = assignment.AssignmentId,
+        asset_id = assetId,
+        expert_id = request.ExpertId,
+        sla_due_at = assignment.SlaDueAt
+    });
+})
+.WithName("AssignExpert")
+.WithTags("Review");
+
+// POST /admin/review/batch/assign — batch assign assets to expert
+app.MapPost("/admin/review/batch/assign", async (
+    BatchAssignExpertRequest request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    if (!Enum.TryParse<Muallimi.Domain.Shared.Subject>(request.ExpertSubject, ignoreCase: true, out var expertSubject))
+        return Results.BadRequest(new { error = $"Invalid expert_subject '{request.ExpertSubject}'." });
+
+    var assigned = new List<Guid>();
+    var errors = new List<object>();
+
+    foreach (var id in request.AssetIds)
+    {
+        var asset = await db.GeneratedAssets.FindAsync(id);
+        if (asset is null)
+        {
+            errors.Add(new { asset_id = id, error = "Not found." });
+            continue;
+        }
+        if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingExpertReview)
+        {
+            errors.Add(new { asset_id = id, error = $"Invalid status: {asset.Status}." });
+            continue;
+        }
+
+        var lesson = await db.Lessons.FindAsync(asset.LessonId);
+        if (lesson is null)
+        {
+            errors.Add(new { asset_id = id, error = "Lesson not found." });
+            continue;
+        }
+
+        try
+        {
+            var assignment = Muallimi.Domain.Review.ReviewAssignment.CreateExpertAssignment(
+                id, request.ExpertId, actor,
+                lesson.Subject, expertSubject, asset.AssetType);
+            db.ReviewAssignments.Add(assignment);
+            assigned.Add(id);
+        }
+        catch (InvalidOperationException ex)
+        {
+            errors.Add(new { asset_id = id, error = ex.Message });
+        }
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "batch-expert-assigned",
+        TargetType = "ReviewAssignment",
+        TargetId = $"batch:{assigned.Count}",
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { assigned_count = assigned.Count, assigned, errors });
+})
+.WithName("BatchAssignExpert")
+.WithTags("Review");
+
+// GET /admin/review/expert/{expertId}/queue — expert's pending queue
+app.MapGet("/admin/review/expert/{expertId}/queue", async (
+    string expertId, MuallimiDbContext db, int page = 1, int pageSize = 20) =>
+{
+    var assignments = await db.ReviewAssignments
+        .Where(a => a.AssignedTo == expertId
+            && a.Tier == Muallimi.Domain.Shared.ReviewTier.ExpertReview
+            && (a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.Open
+                || a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.InReview))
+        .OrderBy(a => a.SlaDueAt)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize)
+        .ToListAsync();
+
+    var items = new List<object>();
+    foreach (var assignment in assignments)
+    {
+        var asset = await db.GeneratedAssets.FindAsync(assignment.AssetId);
+        items.Add(new
+        {
+            assignment_id = assignment.AssignmentId,
+            asset_id = assignment.AssetId,
+            asset_type = asset?.AssetType.ToString(),
+            visual_format = asset?.VisualFormat?.ToString(),
+            status = assignment.Status.ToString(),
+            assigned_at = assignment.AssignedAt,
+            sla_due_at = assignment.SlaDueAt,
+            is_overdue = assignment.IsOverdue,
+            lesson_id = asset?.LessonId,
+            language = asset?.Language
+        });
+    }
+
+    return Results.Ok(new { expert_id = expertId, total = items.Count, items });
+})
+.WithName("GetExpertQueue")
+.WithTags("Review");
+
+// ── T083: PATCH /admin/review/{assetId}/approve — expert approve + publish ──
+
+app.MapMethods("/admin/review/{assetId:guid}/approve", new[] { "PATCH" }, async (
+    Guid assetId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingExpertReview)
+        return Results.BadRequest(new { error = $"Cannot approve from status '{asset.Status}'." });
+
+    // T085: Concurrent approval guard — check if already approved
+    var existingApproval = await db.ReviewDecisions
+        .Where(d => d.AssetId == assetId
+            && d.Tier == Muallimi.Domain.Shared.ReviewTier.ExpertReview
+            && d.Outcome == Muallimi.Domain.Shared.ReviewOutcome.Approved)
+        .AnyAsync();
+
+    if (existingApproval)
+        return Results.Conflict(new { error = "Asset has already been approved by another expert." });
+
+    // Approve the asset
+    asset.MarkApproved();
+
+    // Record expert decision
+    var decision = Muallimi.Domain.Review.ReviewDecision.CreateExpertDecision(
+        assetId, Muallimi.Domain.Shared.ReviewOutcome.Approved, actor,
+        null, null, correlationId);
+    db.ReviewDecisions.Add(decision);
+
+    // Find the admin who submitted this asset to get the full audit trail
+    var adminDecision = await db.ReviewDecisions
+        .Where(d => d.AssetId == assetId && d.Tier == Muallimi.Domain.Shared.ReviewTier.AdminReview
+            && d.Outcome == Muallimi.Domain.Shared.ReviewOutcome.Approved)
+        .OrderByDescending(d => d.DecidedAt)
+        .FirstOrDefaultAsync();
+
+    var adminActor = adminDecision?.ActorId ?? "unknown";
+
+    // Create PublishedAsset with deterministic ID
+    var runtimeUrl = $"/content/{asset.LessonId}/{asset.AssetType.ToString().ToLowerInvariant()}/{asset.AssetId}";
+
+    var published = Muallimi.Domain.Publication.PublishedAsset.Create(
+        asset.AssetId,
+        asset.LessonId,
+        asset.AssetType,
+        asset.VisualFormat,
+        runtimeUrl,
+        adminActor,
+        actor,
+        asset.Version);
+
+    db.PublishedAssets.Add(published);
+
+    // Update CoverageStatus
+    var coverage = await db.CoverageStatuses.FindAsync(asset.LessonId, asset.AssetType);
+    if (coverage is not null)
+    {
+        coverage.State = Muallimi.Domain.Shared.CoverageState.Approved;
+        coverage.LastUpdatedAt = DateTime.UtcNow;
+    }
+    else
+    {
+        db.CoverageStatuses.Add(new Muallimi.Domain.Coverage.CoverageStatus
+        {
+            LessonId = asset.LessonId,
+            AssetType = asset.AssetType,
+            State = Muallimi.Domain.Shared.CoverageState.Approved,
+            LastUpdatedAt = DateTime.UtcNow
+        });
+    }
+
+    // Close the expert assignment
+    var assignment = await db.ReviewAssignments
+        .Where(a => a.AssetId == assetId
+            && a.Tier == Muallimi.Domain.Shared.ReviewTier.ExpertReview
+            && (a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.Open
+                || a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.InReview))
+        .FirstOrDefaultAsync();
+    assignment?.MarkSubmitted();
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "expert-approved",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = assetId,
+        status = asset.Status.ToString(),
+        published_id = published.PublishedId,
+        runtime_url = published.RuntimeUrl,
+        approved_by_admin = adminActor,
+        approved_by_expert = actor,
+        approved_at = published.ApprovedAt
+    });
+})
+.WithName("ExpertApprove")
+.WithTags("Review");
+
+// ── T084: PATCH /admin/review/{assetId}/reject and /request-edit ──
+
+app.MapMethods("/admin/review/{assetId:guid}/reject", new[] { "PATCH" }, async (
+    Guid assetId,
+    RejectRequest request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    if (string.IsNullOrWhiteSpace(request.FixInstruction))
+        return Results.BadRequest(new { error = "fix_instruction is required for rejection." });
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingExpertReview)
+        return Results.BadRequest(new { error = $"Cannot reject from status '{asset.Status}'." });
+
+    asset.MarkRejected();
+
+    Muallimi.Domain.Review.ReviewDecision decision;
+    try
+    {
+        decision = Muallimi.Domain.Review.ReviewDecision.CreateExpertDecision(
+            assetId, Muallimi.Domain.Shared.ReviewOutcome.Rejected, actor,
+            request.FixInstruction, null, correlationId);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
+    db.ReviewDecisions.Add(decision);
+
+    // Close the expert assignment
+    var assignment = await db.ReviewAssignments
+        .Where(a => a.AssetId == assetId
+            && a.Tier == Muallimi.Domain.Shared.ReviewTier.ExpertReview
+            && (a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.Open
+                || a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.InReview))
+        .FirstOrDefaultAsync();
+    assignment?.MarkSubmitted();
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "expert-rejected",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "rejected",
+        CorrelationId = correlationId,
+        Reason = request.FixInstruction
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = assetId,
+        status = asset.Status.ToString(),
+        fix_instruction = request.FixInstruction,
+        decided_at = decision.DecidedAt
+    });
+})
+.WithName("ExpertReject")
+.WithTags("Review");
+
+app.MapMethods("/admin/review/{assetId:guid}/request-edit", new[] { "PATCH" }, async (
+    Guid assetId,
+    RequestEditRequest request,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    if (string.IsNullOrWhiteSpace(request.FixInstruction))
+        return Results.BadRequest(new { error = "fix_instruction is required for edit requests." });
+    if (string.IsNullOrWhiteSpace(request.Stage))
+        return Results.BadRequest(new { error = "stage is required for edit requests." });
+
+    var asset = await db.GeneratedAssets.FindAsync(assetId);
+    if (asset is null)
+        return Results.NotFound(new { error = "Asset not found." });
+
+    if (asset.Status != Muallimi.Domain.Shared.AssetStatus.PendingExpertReview)
+        return Results.BadRequest(new { error = $"Cannot request edit from status '{asset.Status}'." });
+
+    asset.MarkEditRequested();
+
+    Muallimi.Domain.Review.ReviewDecision decision;
+    try
+    {
+        decision = Muallimi.Domain.Review.ReviewDecision.CreateExpertDecision(
+            assetId, Muallimi.Domain.Shared.ReviewOutcome.EditRequested, actor,
+            request.FixInstruction, request.Stage, correlationId);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
+    db.ReviewDecisions.Add(decision);
+
+    // Close the expert assignment
+    var assignment = await db.ReviewAssignments
+        .Where(a => a.AssetId == assetId
+            && a.Tier == Muallimi.Domain.Shared.ReviewTier.ExpertReview
+            && (a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.Open
+                || a.Status == Muallimi.Domain.Shared.ReviewAssignmentStatus.InReview))
+        .FirstOrDefaultAsync();
+    assignment?.MarkSubmitted();
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "review",
+        Action = "expert-edit-requested",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "edit-requested",
+        CorrelationId = correlationId,
+        Reason = $"[{request.Stage}] {request.FixInstruction}"
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = assetId,
+        status = asset.Status.ToString(),
+        stage = request.Stage,
+        fix_instruction = request.FixInstruction,
+        decided_at = decision.DecidedAt
+    });
+})
+.WithName("ExpertRequestEdit")
+.WithTags("Review");
+
+// ── US5: Update and Invalidation Endpoints ──
+
+// T105: POST /admin/curriculum/{sourceId}/update — upload updated source; delta re-processes only changed lessons
+app.MapPost("/admin/curriculum/{sourceId:guid}/update", async (
+    Guid sourceId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AssetInvalidationHandler invalidationHandler,
+    AuditEventEmitter audit) =>
+{
+    if (!httpContext.Request.HasFormContentType)
+        return Results.BadRequest(new { error = "Multipart form data required." });
+
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    // Find the existing source
+    var existingSource = await db.CurriculumSources.FindAsync(sourceId);
+    if (existingSource is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    if (existingSource.Status != Muallimi.Domain.Shared.SourceStatus.Indexed)
+        return Results.BadRequest(new { error = $"Cannot update source in status '{existingSource.Status}'. Must be 'Indexed'." });
+
+    var form = await httpContext.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "An updated curriculum file is required." });
+
+    // Determine file format
+    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+    Muallimi.Domain.Shared.FileFormat format = ext switch
+    {
+        ".pdf" => Muallimi.Domain.Shared.FileFormat.Pdf,
+        ".docx" => Muallimi.Domain.Shared.FileFormat.Docx,
+        ".html" or ".htm" => Muallimi.Domain.Shared.FileFormat.Html,
+        _ => throw new InvalidOperationException($"Unsupported file format '{ext}'. Accepted: .pdf, .docx, .html")
+    };
+
+    // Compute content hash for the new file
+    using var stream = file.OpenReadStream();
+    using var sha = System.Security.Cryptography.SHA256.Create();
+    var hashBytes = await sha.ComputeHashAsync(stream);
+    var contentHash = Convert.ToHexStringLower(hashBytes);
+    stream.Position = 0;
+
+    // If file hasn't changed at all, short-circuit
+    if (existingSource.ContentHash == contentHash)
+        return Results.Ok(new { message = "File identical to current version. No update needed.", source_id = sourceId });
+
+    // Store the updated file
+    var storageKey = $"curriculum/{existingSource.CurriculumType}/{existingSource.Grade}/{existingSource.Subject}/{Guid.NewGuid()}{ext}";
+    var localPath = Path.Combine(Directory.GetCurrentDirectory(), "storage", storageKey);
+    Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+    await using (var fs = File.Create(localPath))
+    {
+        await stream.CopyToAsync(fs);
+    }
+
+    // Collect existing lesson hashes for delta comparison (sent to ingestion worker)
+    var existingLessons = await db.Lessons
+        .Where(l => l.StructureId == (db.CurriculumStructures
+            .Where(s => s.SourceId == sourceId)
+            .OrderByDescending(s => s.ExtractedAt)
+            .Select(s => s.StructureId)
+            .FirstOrDefault()))
+        .Select(l => new { l.LessonId, l.Path, l.ContentHash })
+        .ToListAsync();
+
+    // Mark existing source as replaced
+    existingSource.MarkReplaced();
+
+    // Create a new CurriculumSource for the updated file
+    var newSource = Muallimi.Domain.Curriculum.CurriculumSource.Create(
+        existingSource.CurriculumType,
+        existingSource.Grade,
+        existingSource.Subject,
+        existingSource.AcademicYear,
+        existingSource.TutorLanguage,
+        format,
+        storageKey,
+        contentHash,
+        actor);
+
+    var job = Muallimi.Domain.Content.IngestionJob.Create(newSource.SourceId, correlationId);
+
+    db.CurriculumSources.Add(newSource);
+    db.IngestionJobs.Add(job);
+
+    // Write change log entries for the update
+    foreach (var lesson in existingLessons)
+    {
+        db.ChangeLogEntries.Add(Muallimi.Domain.Curriculum.ChangeLogEntry.Create(
+            lesson.LessonId,
+            Muallimi.Domain.Shared.ChangeEventType.LessonUpdated,
+            actor,
+            $"Source replaced: new version uploaded",
+            correlationId));
+    }
+
+    await db.SaveChangesAsync();
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "source-updated",
+        TargetType = "CurriculumSource",
+        TargetId = newSource.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId,
+        Reason = $"Replaced source {sourceId}"
+    });
+
+    return Results.Created($"/admin/curriculum/jobs/{job.JobId}", new
+    {
+        previous_source_id = sourceId,
+        new_source_id = newSource.SourceId,
+        job_id = job.JobId,
+        status = job.Status.ToString(),
+        correlation_id = correlationId,
+        existing_lessons = existingLessons.Select(l => new
+        {
+            lesson_id = l.LessonId,
+            path = l.Path,
+            content_hash = l.ContentHash
+        }),
+        delta_comparison = "pending"
+    });
+})
+.WithName("UpdateCurriculumSource")
+.WithTags("Curriculum")
+.DisableAntiforgery();
+
+// T107: PATCH /admin/content/{assetId}/invalidate — manually invalidate a live asset
+app.MapMethods("/admin/content/{assetId:guid}/invalidate", new[] { "PATCH" }, async (
+    Guid assetId,
+    InvalidateRequest request,
+    HttpContext httpContext,
+    AssetInvalidationHandler invalidationHandler,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    if (string.IsNullOrWhiteSpace(request.Reason))
+        return Results.BadRequest(new { error = "reason is required for invalidation." });
+
+    SingleAssetInvalidationResult result;
+    try
+    {
+        result = await invalidationHandler.InvalidateSingleAssetAsync(
+            assetId, actor, request.Reason, correlationId);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "content",
+        Action = "asset-invalidated",
+        TargetType = "GeneratedAsset",
+        TargetId = assetId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId,
+        Reason = request.Reason
+    });
+
+    return Results.Ok(new
+    {
+        asset_id = result.AssetId,
+        lesson_id = result.LessonId,
+        asset_type = result.AssetType,
+        lesson_status = result.LessonStatus,
+        reason = request.Reason,
+        invalidated_at = DateTime.UtcNow
+    });
+})
+.WithName("InvalidateAsset")
+.WithTags("Content");
+
+// T105: Internal endpoint — lookup existing lesson hashes for delta comparison by ingestion worker
+app.MapGet("/internal/lessons/hashes", async (
+    Guid sourceId, MuallimiDbContext db) =>
+{
+    // Find the latest structure for this source
+    var structure = await db.CurriculumStructures
+        .Where(s => s.SourceId == sourceId)
+        .OrderByDescending(s => s.ExtractedAt)
+        .FirstOrDefaultAsync();
+
+    if (structure is null)
+        return Results.Ok(new { lessons = Array.Empty<object>() });
+
+    var lessons = await db.Lessons
+        .Where(l => l.StructureId == structure.StructureId)
+        .Select(l => new
+        {
+            lesson_id = l.LessonId,
+            path = l.Path,
+            content_hash = l.ContentHash
+        })
+        .ToListAsync();
+
+    return Results.Ok(new { source_id = sourceId, lessons });
+})
+.WithName("GetLessonHashes")
+.WithTags("Internal");
+
+// ── US4: Runtime Retrieval Endpoints ──
+app.MapRetrievalEndpoints();
+
+// ── US6: Coverage dashboard ──
+app.MapCoverageEndpoints();
+
+// ── Phase 2 US1: Tutor exposure facade ──
+app.MapTutorExposureEndpoints();
+
+// ── Phase 2 US3: AI tutor routing configuration admin surface ──
+app.MapRoutingConfigurationEndpoints();
+
+// ── Phase 2 US4 (T078, T082): Prompt registry CRUD + audit + incident lookup ──
+app.MapPromptRegistryEndpoints();
+app.MapIncidentLookupEndpoint();
+
+// ── Phase 2 US5 (T090): Provider binding admin surface ──
+app.MapProviderBindingEndpoints();
+
+// ── Phase 2 US6 (T102): AI operations query surface (requests / metrics / refusals / readiness) ──
+app.MapAiOperationsEndpoints();
+
+// ── Phase 2 US7 (T114/T117): Red-team results query surface ──
+app.MapRedTeamResultsEndpoints();
+
+app.Run();
+
+// ── Request DTOs for internal endpoints ──
+
+record IngestionJobStatusUpdate(
+    [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
+    [property: System.Text.Json.Serialization.JsonPropertyName("stages")] object[]? Stages,
+    [property: System.Text.Json.Serialization.JsonPropertyName("error_reason")] string? ErrorReason,
+    [property: System.Text.Json.Serialization.JsonPropertyName("correlation_id")] string? CorrelationId);
+
+record IngestionResultPayload(
+    [property: System.Text.Json.Serialization.JsonPropertyName("source_id")] Guid SourceId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("job_id")] Guid JobId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("structure_nodes")] string StructureNodes,
+    [property: System.Text.Json.Serialization.JsonPropertyName("lessons")] List<IngestionLessonPayload> Lessons);
+
+record IngestionLessonPayload(
+    [property: System.Text.Json.Serialization.JsonPropertyName("title")] string Title,
+    [property: System.Text.Json.Serialization.JsonPropertyName("path")] string Path,
+    [property: System.Text.Json.Serialization.JsonPropertyName("content_hash")] string ContentHash,
+    [property: System.Text.Json.Serialization.JsonPropertyName("chunks")] List<IngestionChunkPayload> Chunks);
+
+record IngestionChunkPayload(
+    [property: System.Text.Json.Serialization.JsonPropertyName("sequence")] int Sequence,
+    [property: System.Text.Json.Serialization.JsonPropertyName("text")] string Text,
+    [property: System.Text.Json.Serialization.JsonPropertyName("token_count")] int TokenCount,
+    [property: System.Text.Json.Serialization.JsonPropertyName("overlap_with_previous")] int OverlapWithPrevious,
+    [property: System.Text.Json.Serialization.JsonPropertyName("math_blocks")] string MathBlocks,
+    [property: System.Text.Json.Serialization.JsonPropertyName("source_refs")] string SourceRefs,
+    [property: System.Text.Json.Serialization.JsonPropertyName("metadata")] string Metadata,
+    [property: System.Text.Json.Serialization.JsonPropertyName("embedding")] float[]? Embedding,
+    [property: System.Text.Json.Serialization.JsonPropertyName("embedding_model_version")] string? EmbeddingModelVersion);
+
+// ── Generation DTOs ──
+
+record GenerationBatchRequest(
+    string? CurriculumType,
+    string? Grade,
+    string? Subject);
+
+record GenerationJobStatusUpdate(
+    string Status,
+    object[]? Stages,
+    string? ErrorReason,
+    string? CostSummary);
+
+record GenerationResultPayload(
+    Guid JobId,
+    string CorrelationId,
+    List<GenerationAssetPayload> Assets,
+    FormatDecisionPayload? FormatDecision);
+
+record GenerationAssetPayload(
+    string AssetType,
+    string? VisualFormat,
+    string StorageKey,
+    string? Transcript,
+    string Language,
+    int Version,
+    string ProducedBy,
+    string? Cost);
+
+record FormatDecisionPayload(
+    string SelectedFormat,
+    string RuleTriggered,
+    string? LlmRefinement);
+
+// ── Review DTOs (US3) ──
+
+record AutoValidationPayload(
+    string AssetId,
+    string? Checks,
+    string? GroundingEvidence,
+    string? ArabicQuality,
+    string? Rendering,
+    string? NarrationSync,
+    string? Accessibility,
+    string? Alignment,
+    string? Decision,
+    string? CorrelationId);
+
+record RegenerateRequest(string? Stage);
+
+record BatchSubmitRequest(List<Guid> AssetIds);
+
+record AssignExpertRequest(string ExpertId, string ExpertSubject);
+
+record BatchAssignExpertRequest(List<Guid> AssetIds, string ExpertId, string ExpertSubject);
+
+record RejectRequest(string FixInstruction);
+
+record RequestEditRequest(string FixInstruction, string Stage);
+
+// ── US5 DTOs (Update & Invalidation) ──
+
+record InvalidateRequest(string Reason);

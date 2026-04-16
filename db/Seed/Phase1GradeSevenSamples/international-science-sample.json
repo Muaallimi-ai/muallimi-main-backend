@@ -1,0 +1,22 @@
+{
+  "curriculum_type": "international",
+  "grade": "grade_7",
+  "subject": "science",
+  "academic_year": "2025-2026",
+  "tutor_language": "en",
+  "sample_lesson": {
+    "chapter": "Forces and Motion",
+    "topic": "Newton's Laws",
+    "subtopic": "First Law of Motion",
+    "lesson_title": "Inertia and Newton's First Law",
+    "content_preview": "Newton's First Law of Motion states that an object at rest stays at rest, and an object in motion stays in motion at the same speed and in the same direction, unless acted upon by an unbalanced force. This property of matter is called inertia.",
+    "math_blocks": [
+      {
+        "latex": "F_{net} = 0 \\Rightarrow \\Delta v = 0",
+        "plain_text": "If net force = 0, then change in velocity = 0"
+      }
+    ],
+    "expected_chunks": 3,
+    "expected_asset_types": ["text_summary", "audio", "visual", "quiz_item", "qa_cache_entry"]
+  }
+}
