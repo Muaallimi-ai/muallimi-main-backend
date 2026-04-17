@@ -5,6 +5,18 @@ using Muallimi.Api.PromptAudit;
 using Muallimi.Api.ProviderBindings;
 using Muallimi.Api.Publication;
 using Muallimi.Api.RetrievalApi;
+using Muallimi.Api.StudentExperience;
+using Muallimi.Api.StudentExperience.HomeDashboard;
+using Muallimi.Api.StudentExperience.HomeworkHelp;
+using Muallimi.Api.StudentExperience.LessonRetrieval;
+using Muallimi.Api.StudentExperience.MockTest;
+using Muallimi.Api.StudentExperience.PlanGating;
+using Muallimi.Api.StudentExperience.QuizDelivery;
+using Muallimi.Api.StudentExperience.SessionEvents;
+using Muallimi.Api.StudentExperience.StudentSession;
+using Muallimi.Api.StudentExperience.Tenancy;
+using Muallimi.Api.StudentExperience.TutorExposure;
+using Muallimi.Api.StudentExperience.Whiteboard;
 using Muallimi.Api.TutorExposure;
 using Muallimi.Application.Audit;
 using Muallimi.Infrastructure.AiOperations;
@@ -25,11 +37,18 @@ builder.Host.UseSerilog((context, config) => config
     .WriteTo.Seq(context.Configuration["Seq:Url"] ?? "http://localhost:5341"));
 
 // EF Core + PostgreSQL + pgvector
-builder.Services.AddDbContext<MuallimiDbContext>(options =>
+// Phase 3 (T007): register ambient tenant accessor so the DbContext's global
+// query filters scope every tenant-aware query by X-Tenant-Id.
+builder.Services.AddPhase3Tenancy();
+builder.Services.AddPhase3CorrelationPropagation();
+builder.Services.AddDbContext<MuallimiDbContext>((sp, options) =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("DefaultConnection")
             ?? "Host=localhost;Port=5432;Database=muallimi_dev;Username=muallimi;Password=muallimi",
         npgsql => npgsql.UseVector()));
+// The DbContext's tenant-aware constructor takes IDbTenantContextAccessor via
+// DI; AddDbContext picks the longest ctor that it can resolve, so the
+// accessor registered above is injected automatically.
 
 // Application services
 builder.Services.AddSingleton<AuditEventEmitter>();
@@ -94,6 +113,24 @@ builder.Services.AddSingleton<Minio.IMinioClient>(sp =>
 builder.Services.AddSingleton<ICurriculumBlobStore, MinioCurriculumBlobStore>();
 builder.Services.AddSingleton<IIngestionJobPublisher, RabbitMqIngestionJobPublisher>();
 
+// ── Phase 3 (T011, T013–T017): Student Experience facade services ──
+builder.Services.AddPhase3PlanGate();
+builder.Services.AddPhase3SessionEventOutbox();
+builder.Services.AddPhase3SessionEventDispatcher();
+builder.Services.AddPhase3StudentSessionRepository();
+builder.Services.AddPhase3TutorRuntimeClient(builder.Configuration);
+builder.Services.AddPhase3CurriculumRetrievalClient(builder.Configuration);
+builder.Services.AddPhase3HomeDashboard();
+builder.Services.AddPhase3LessonRetrieval();
+builder.Services.AddPhase3LessonViewerState();
+builder.Services.AddPhase3TutorChatMessageRepository();
+builder.Services.AddPhase3VoiceCaptureRepository();
+builder.Services.AddPhase3TutorVoiceEndpoint();
+builder.Services.AddPhase3QuizDelivery();
+builder.Services.AddPhase3MockTest();
+builder.Services.AddPhase3HomeworkHelp();
+builder.Services.AddPhase3Whiteboard();
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -122,6 +159,9 @@ if (app.Environment.IsDevelopment())
 
 // Health check
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "muallimi-main-backend" }));
+
+// ── Phase 3 US1: Student Experience endpoints (session lifecycle + plan gate) ──
+app.MapStudentExperience();
 
 // ── Curriculum Admin API: Upload & Ingestion ──
 

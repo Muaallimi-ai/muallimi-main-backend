@@ -1,3 +1,5 @@
+using System;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Muallimi.Domain.AiOperations;
 using Muallimi.Domain.Content;
@@ -8,12 +10,38 @@ using Muallimi.Domain.ProviderBindings;
 using Muallimi.Domain.Publication;
 using Muallimi.Domain.Review;
 using Muallimi.Domain.Shared;
+using Muallimi.Domain.StudentExperience;
 
 namespace Muallimi.Infrastructure.Persistence;
 
+/// <summary>
+/// Ambient tenant accessor contract. Supplied by Phase 3 Api-layer
+/// HttpTenantContextAccessor at runtime, or by test doubles in unit/contract
+/// tests. Null value means "no tenant scope" — filter matches nothing.
+/// </summary>
+public interface IDbTenantContextAccessor
+{
+    Guid? CurrentTenantId { get; }
+}
+
+public sealed class NullTenantContextAccessor : IDbTenantContextAccessor
+{
+    public Guid? CurrentTenantId => null;
+}
+
 public class MuallimiDbContext : DbContext
 {
-    public MuallimiDbContext(DbContextOptions<MuallimiDbContext> options) : base(options) { }
+    private readonly IDbTenantContextAccessor _tenantContextAccessor;
+
+    public MuallimiDbContext(DbContextOptions<MuallimiDbContext> options)
+        : this(options, new NullTenantContextAccessor()) { }
+
+    public MuallimiDbContext(
+        DbContextOptions<MuallimiDbContext> options,
+        IDbTenantContextAccessor tenantContextAccessor) : base(options)
+    {
+        _tenantContextAccessor = tenantContextAccessor;
+    }
 
     // Curriculum
     public DbSet<CurriculumSource> CurriculumSources => Set<CurriculumSource>();
@@ -50,6 +78,19 @@ public class MuallimiDbContext : DbContext
     public DbSet<AiOperationsMetric> AiOperationsMetrics => Set<AiOperationsMetric>();
     public DbSet<RedTeamScenarioSet> RedTeamScenarioSets => Set<RedTeamScenarioSet>();
     public DbSet<RedTeamEvaluationResult> RedTeamEvaluationResults => Set<RedTeamEvaluationResult>();
+
+    // ── Phase 3: Student Learning Experience ──
+    public DbSet<StudentProfile> StudentProfiles => Set<StudentProfile>();
+    public DbSet<StudentSession> StudentSessions => Set<StudentSession>();
+    public DbSet<LessonViewerState> LessonViewerStates => Set<LessonViewerState>();
+    public DbSet<TutorChatMessage> TutorChatMessages => Set<TutorChatMessage>();
+    public DbSet<VoiceCapture> VoiceCaptures => Set<VoiceCapture>();
+    public DbSet<QuizSession> QuizSessions => Set<QuizSession>();
+    public DbSet<MockTestSession> MockTestSessions => Set<MockTestSession>();
+    public DbSet<HomeworkHelpSubmission> HomeworkHelpSubmissions => Set<HomeworkHelpSubmission>();
+    public DbSet<WhiteboardSession> WhiteboardSessions => Set<WhiteboardSession>();
+    public DbSet<PlanGatePolicy> PlanGatePolicies => Set<PlanGatePolicy>();
+    public DbSet<SessionEvent> SessionEvents => Set<SessionEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -483,5 +524,251 @@ public class MuallimiDbContext : DbContext
             e.Property(x => x.PromotionBlockFlag).HasColumnName("promotion_block_flag");
             e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
         });
+
+        ConfigurePhase3(modelBuilder);
+        ApplyPhase3TenantFilters(modelBuilder);
+    }
+
+    private static void ConfigurePhase3(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<StudentProfile>(e =>
+        {
+            e.ToTable("student_profiles");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.DisplayName).HasColumnName("display_name");
+            e.Property(x => x.AvatarReference).HasColumnName("avatar_reference");
+            e.Property(x => x.CurriculumType).HasColumnName("curriculum_type");
+            e.Property(x => x.Grade).HasColumnName("grade");
+            e.Property(x => x.PreferredLanguage).HasColumnName("preferred_language");
+            e.Property(x => x.RtlOverride).HasColumnName("rtl_override");
+            e.Property(x => x.PlanTier).HasColumnName("plan_tier");
+            e.Property(x => x.SubjectsEnrolled).HasColumnName("subjects_enrolled").HasColumnType("jsonb");
+            e.Property(x => x.ConsentState).HasColumnName("consent_state");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.TenantId);
+        });
+
+        modelBuilder.Entity<StudentSession>(e =>
+        {
+            e.ToTable("student_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentProfileId).HasColumnName("student_profile_id");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.ActiveCurriculumType).HasColumnName("active_curriculum_type");
+            e.Property(x => x.ActiveGrade).HasColumnName("active_grade");
+            e.Property(x => x.ActiveSubjectId).HasColumnName("active_subject_id");
+            e.Property(x => x.ActiveChapterId).HasColumnName("active_chapter_id");
+            e.Property(x => x.ActiveTopicId).HasColumnName("active_topic_id");
+            e.Property(x => x.ActiveLessonId).HasColumnName("active_lesson_id");
+            e.Property(x => x.ActiveMode).HasColumnName("active_mode");
+            e.Property(x => x.TutorLanguage).HasColumnName("tutor_language");
+            e.Property(x => x.DeviceClass).HasColumnName("device_class");
+            e.Property(x => x.PlanTierSnapshot).HasColumnName("plan_tier_snapshot");
+            e.Property(x => x.SessionStartedAt).HasColumnName("session_started_at");
+            e.Property(x => x.SessionLastActivityAt).HasColumnName("session_last_activity_at");
+            e.Property(x => x.SessionEndedAt).HasColumnName("session_ended_at");
+            e.Property(x => x.EndReason).HasColumnName("end_reason");
+            e.HasIndex(x => new { x.TenantId, x.StudentProfileId });
+            e.HasIndex(x => x.CorrelationId);
+        });
+
+        modelBuilder.Entity<LessonViewerState>(e =>
+        {
+            e.ToTable("lesson_viewer_states");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.LessonId).HasColumnName("lesson_id");
+            e.Property(x => x.ViewerPosition).HasColumnName("viewer_position").HasColumnType("jsonb");
+            e.Property(x => x.PlaybackState).HasColumnName("playback_state");
+            e.Property(x => x.TeacherVoiceProfileId).HasColumnName("teacher_voice_profile_id");
+            e.Property(x => x.CaptionsEnabled).HasColumnName("captions_enabled");
+            e.Property(x => x.Rate).HasColumnName("rate");
+            e.Property(x => x.LastInteractionAt).HasColumnName("last_interaction_at");
+            e.HasIndex(x => new { x.TenantId, x.StudentSessionId });
+        });
+
+        modelBuilder.Entity<TutorChatMessage>(e =>
+        {
+            e.ToTable("tutor_chat_messages");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.TurnNumber).HasColumnName("turn_number");
+            e.Property(x => x.Role).HasColumnName("role");
+            e.Property(x => x.Modality).HasColumnName("modality");
+            e.Property(x => x.Language).HasColumnName("language");
+            e.Property(x => x.ContentText).HasColumnName("content_text");
+            e.Property(x => x.VoiceCaptureReference).HasColumnName("voice_capture_reference");
+            e.Property(x => x.VoicePlaybackReference).HasColumnName("voice_playback_reference");
+            e.Property(x => x.AiRequestRecordId).HasColumnName("ai_request_record_id");
+            e.Property(x => x.GuardrailFinalStage).HasColumnName("guardrail_final_stage");
+            e.Property(x => x.FinalOutcome).HasColumnName("final_outcome");
+            e.Property(x => x.ConfidenceSignal).HasColumnName("confidence_signal");
+            e.Property(x => x.EvidenceRefs).HasColumnName("evidence_refs").HasColumnType("jsonb");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.StudentSessionId, x.TurnNumber }).IsUnique();
+        });
+
+        modelBuilder.Entity<VoiceCapture>(e =>
+        {
+            e.ToTable("voice_captures");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.TutorChatMessageId).HasColumnName("tutor_chat_message_id");
+            e.Property(x => x.BlobReference).HasColumnName("blob_reference");
+            e.Property(x => x.DurationMs).HasColumnName("duration_ms");
+            e.Property(x => x.Codec).HasColumnName("codec");
+            e.Property(x => x.UploadState).HasColumnName("upload_state");
+            e.Property(x => x.SttState).HasColumnName("stt_state");
+            e.Property(x => x.TranscriptText).HasColumnName("transcript_text");
+            e.Property(x => x.SttAdapterBindingId).HasColumnName("stt_adapter_binding_id");
+            e.Property(x => x.RetentionUntil).HasColumnName("retention_until");
+            e.HasIndex(x => x.StudentSessionId);
+        });
+
+        modelBuilder.Entity<QuizSession>(e =>
+        {
+            e.ToTable("quiz_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.ChapterId).HasColumnName("chapter_id");
+            e.Property(x => x.TopicId).HasColumnName("topic_id");
+            e.Property(x => x.QuestionBankSnapshot).HasColumnName("question_bank_snapshot").HasColumnType("jsonb");
+            e.Property(x => x.Progress).HasColumnName("progress").HasColumnType("jsonb");
+            e.Property(x => x.State).HasColumnName("state");
+            e.Property(x => x.StartedAt).HasColumnName("started_at");
+            e.Property(x => x.EndedAt).HasColumnName("ended_at");
+            e.HasIndex(x => x.StudentSessionId);
+        });
+
+        modelBuilder.Entity<MockTestSession>(e =>
+        {
+            e.ToTable("mock_test_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.QuestionBankSnapshot).HasColumnName("question_bank_snapshot").HasColumnType("jsonb");
+            e.Property(x => x.TimeLimitSeconds).HasColumnName("time_limit_seconds");
+            e.Property(x => x.ServerStartedAt).HasColumnName("server_started_at");
+            e.Property(x => x.ServerDeadlineAt).HasColumnName("server_deadline_at");
+            e.Property(x => x.Progress).HasColumnName("progress").HasColumnType("jsonb");
+            e.Property(x => x.State).HasColumnName("state");
+            e.Property(x => x.PlanTierSnapshot).HasColumnName("plan_tier_snapshot");
+            e.Property(x => x.FinalScore).HasColumnName("final_score");
+            e.HasIndex(x => x.StudentSessionId);
+        });
+
+        modelBuilder.Entity<HomeworkHelpSubmission>(e =>
+        {
+            e.ToTable("homework_help_submissions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.InputModality).HasColumnName("input_modality");
+            e.Property(x => x.TextPayload).HasColumnName("text_payload");
+            e.Property(x => x.VoiceCaptureId).HasColumnName("voice_capture_id");
+            e.Property(x => x.ImageBlobReference).HasColumnName("image_blob_reference");
+            e.Property(x => x.ImagePreprocessMetadata).HasColumnName("image_preprocess_metadata").HasColumnType("jsonb");
+            e.Property(x => x.OcrAdapterBindingId).HasColumnName("ocr_adapter_binding_id");
+            e.Property(x => x.ExtractedProblemText).HasColumnName("extracted_problem_text");
+            e.Property(x => x.AiRequestRecordId).HasColumnName("ai_request_record_id");
+            e.Property(x => x.FinalOutcome).HasColumnName("final_outcome");
+            e.Property(x => x.RetentionUntil).HasColumnName("retention_until");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => x.StudentSessionId);
+        });
+
+        modelBuilder.Entity<WhiteboardSession>(e =>
+        {
+            e.ToTable("whiteboard_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.TopicId).HasColumnName("topic_id");
+            e.Property(x => x.PlanTierSnapshot).HasColumnName("plan_tier_snapshot");
+            e.Property(x => x.SessionMode).HasColumnName("session_mode");
+            e.Property(x => x.StepLog).HasColumnName("step_log").HasColumnType("jsonb");
+            e.Property(x => x.StartedAt).HasColumnName("started_at");
+            e.Property(x => x.EndedAt).HasColumnName("ended_at");
+            e.Property(x => x.EndReason).HasColumnName("end_reason");
+            e.HasIndex(x => x.StudentSessionId);
+        });
+
+        modelBuilder.Entity<PlanGatePolicy>(e =>
+        {
+            e.ToTable("plan_gate_policies");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.Mode).HasColumnName("mode");
+            e.Property(x => x.RequiredPlanTiers).HasColumnName("required_plan_tiers").HasColumnType("jsonb");
+            e.Property(x => x.SubjectScope).HasColumnName("subject_scope").HasColumnType("jsonb");
+            e.Property(x => x.GradeScope).HasColumnName("grade_scope").HasColumnType("jsonb");
+            e.Property(x => x.EnabledAt).HasColumnName("enabled_at");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.PolicySource).HasColumnName("policy_source");
+            e.HasIndex(x => new { x.Mode, x.TenantId, x.EnabledAt });
+        });
+
+        modelBuilder.Entity<SessionEvent>(e =>
+        {
+            e.ToTable("session_events");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.StudentSessionId).HasColumnName("student_session_id");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.EventKind).HasColumnName("event_kind");
+            e.Property(x => x.EventPayload).HasColumnName("event_payload").HasColumnType("jsonb");
+            e.Property(x => x.CurriculumScope).HasColumnName("curriculum_scope").HasColumnType("jsonb");
+            e.Property(x => x.PlanTierSnapshot).HasColumnName("plan_tier_snapshot");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
+            e.Property(x => x.DispatchAttempts).HasColumnName("dispatch_attempts");
+            e.Property(x => x.DispatchState).HasColumnName("dispatch_state");
+            e.HasIndex(x => new { x.DispatchState, x.CreatedAt });
+            e.HasIndex(x => x.CorrelationId);
+        });
+    }
+
+    private void ApplyPhase3TenantFilters(ModelBuilder modelBuilder)
+    {
+        ApplyTenantFilter<StudentProfile>(modelBuilder);
+        ApplyTenantFilter<StudentSession>(modelBuilder);
+        ApplyTenantFilter<LessonViewerState>(modelBuilder);
+        ApplyTenantFilter<TutorChatMessage>(modelBuilder);
+        ApplyTenantFilter<VoiceCapture>(modelBuilder);
+        ApplyTenantFilter<QuizSession>(modelBuilder);
+        ApplyTenantFilter<MockTestSession>(modelBuilder);
+        ApplyTenantFilter<HomeworkHelpSubmission>(modelBuilder);
+        ApplyTenantFilter<WhiteboardSession>(modelBuilder);
+        ApplyTenantFilter<SessionEvent>(modelBuilder);
+    }
+
+    private void ApplyTenantFilter<TEntity>(ModelBuilder modelBuilder)
+        where TEntity : class, ITenantScoped
+    {
+        Expression<Func<TEntity, bool>> filter = e =>
+            _tenantContextAccessor.CurrentTenantId == null ||
+            e.TenantId == _tenantContextAccessor.CurrentTenantId;
+        modelBuilder.Entity<TEntity>().HasQueryFilter(filter);
     }
 }
