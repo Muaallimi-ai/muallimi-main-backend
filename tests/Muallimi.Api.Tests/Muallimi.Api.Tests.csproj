@@ -20,6 +20,80 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Muallimi.Api\Muallimi.Api.csproj" />
+    <ProjectReference Include="..\..\src\Muallimi.Infrastructure\Muallimi.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Muallimi.Domain\Muallimi.Domain.csproj" />
+  </ItemGroup>
+
+  <!-- Phase 5 US3 contract tests + shared harness (T067–T070). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolManagement\ClassManagement\**\*.cs" LinkBase="contract\SchoolManagement\ClassManagement" />
+    <Compile Include="..\integration\SchoolManagement\_lib\Phase5TestDbContext.cs" LinkBase="integration\SchoolManagement\_lib" />
+    <Compile Include="..\integration\SchoolManagement\_lib\RoleIsolationHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+    <Compile Include="..\integration\SchoolManagement\_lib\TenantIsolationHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US4 contract + integration tests (T084–T088). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolManagement\SchoolDashboard\**\*.cs" LinkBase="contract\SchoolManagement\SchoolDashboard" />
+    <Compile Include="..\integration\SchoolManagement\_lib\DashboardHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+    <Compile Include="..\integration\SchoolManagement\Phase4EventConsumptionTests.cs" LinkBase="integration\SchoolManagement" />
+  </ItemGroup>
+
+  <!-- Phase 5 US5 contract + harness (T102–T105). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolManagement\TeacherDashboard\**\*.cs" LinkBase="contract\SchoolManagement\TeacherDashboard" />
+    <Compile Include="..\integration\SchoolManagement\_lib\TeacherDashboardHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US6 contract + integration tests (T116–T121). -->
+  <ItemGroup>
+    <Compile Include="..\contract\Exams\**\*.cs" LinkBase="contract\Exams" />
+    <Compile Include="..\integration\Exams\**\*.cs" LinkBase="integration\Exams" />
+    <Compile Include="..\integration\SchoolManagement\_lib\ExamHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US7 contract + integration tests (T140–T143). -->
+  <ItemGroup>
+    <Compile Include="..\contract\Leaderboards\**\*.cs" LinkBase="contract\Leaderboards" />
+    <Compile Include="..\integration\Leaderboards\**\*.cs" LinkBase="integration\Leaderboards" />
+    <Compile Include="..\integration\SchoolManagement\_lib\LeaderboardHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US8 contract + integration tests (T153–T156). -->
+  <ItemGroup>
+    <Compile Include="..\contract\Announcements\**\*.cs" LinkBase="contract\Announcements" />
+    <Compile Include="..\integration\Announcements\**\*.cs" LinkBase="integration\Announcements" />
+    <Compile Include="..\integration\SchoolManagement\_lib\AnnouncementHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US9 contract + integration tests (T169–T171). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolReports\**\*.cs" LinkBase="contract\SchoolReports" />
+    <Compile Include="..\integration\SchoolReports\**\*.cs" LinkBase="integration\SchoolReports" />
+    <Compile Include="..\integration\SchoolManagement\_lib\SchoolReportHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 US10 contract + integration tests (T182–T186). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolManagement\Licensing\**\*.cs" LinkBase="contract\SchoolManagement\Licensing" />
+    <Compile Include="..\integration\SchoolManagement\Licensing\**\*.cs" LinkBase="integration\SchoolManagement\Licensing" />
+    <Compile Include="..\integration\SchoolManagement\_lib\LicensingHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
+  </ItemGroup>
+
+  <!-- Phase 5 Polish cross-cutting tests (T199–T208). -->
+  <ItemGroup>
+    <Compile Include="..\contract\SchoolManagement\DownstreamEvents\**\*.cs" LinkBase="contract\SchoolManagement\DownstreamEvents" />
+    <Compile Include="..\integration\SchoolManagement\CrossSurfaceTenantIsolationTests.cs" LinkBase="integration\SchoolManagement" />
+    <Compile Include="..\integration\SchoolManagement\CrossSurfaceRoleIsolationTests.cs" LinkBase="integration\SchoolManagement" />
+    <Compile Include="..\integration\SchoolManagement\CorrelationPropagationTests.cs" LinkBase="integration\SchoolManagement" />
+    <Compile Include="..\integration\SchoolManagement\PerformanceBudgetTests.cs" LinkBase="integration\SchoolManagement" />
+    <Compile Include="..\integration\SchoolManagement\OperatorImpersonationAuditTests.cs" LinkBase="integration\SchoolManagement" />
+    <Compile Include="..\integration\SchoolManagement\RosterImport\LargeRosterTests.cs" LinkBase="integration\SchoolManagement\RosterImport" />
   </ItemGroup>
 
 </Project>

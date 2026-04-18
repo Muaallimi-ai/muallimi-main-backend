@@ -59,8 +59,9 @@ public class DispatchResilienceTests
         // marked published. Nothing is silently dropped.
         await drainer.DrainOnceAsync(db);
 
+        var expectedCount = Enum.GetValues<SessionEventKind>().Length;
         var afterOutage = await db.SessionEvents.IgnoreQueryFilters().ToListAsync();
-        Assert.Equal(11, afterOutage.Count);
+        Assert.Equal(expectedCount, afterOutage.Count);
         Assert.All(afterOutage, r => Assert.Equal("pending", r.DispatchState));
         Assert.All(afterOutage, r => Assert.Equal(1, r.DispatchAttempts));
         Assert.All(afterOutage, r => Assert.Null(r.DispatchedAt));
@@ -71,7 +72,7 @@ public class DispatchResilienceTests
         await drainer.DrainOnceAsync(db);
 
         var afterRecovery = await db.SessionEvents.IgnoreQueryFilters().ToListAsync();
-        Assert.Equal(11, afterRecovery.Count);
+        Assert.Equal(expectedCount, afterRecovery.Count);
         Assert.All(afterRecovery, r => Assert.Equal("published", r.DispatchState));
         Assert.All(afterRecovery, r => Assert.NotNull(r.DispatchedAt));
         Assert.All(afterRecovery, r => Assert.Equal(2, r.DispatchAttempts));

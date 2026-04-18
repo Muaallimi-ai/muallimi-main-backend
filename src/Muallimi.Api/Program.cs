@@ -12,12 +12,36 @@ using Muallimi.Api.Engagement.ProgressIngestion;
 using Muallimi.Api.Engagement.StreakCalculation;
 using Muallimi.Api.Engagement.WeeklyReports;
 using Muallimi.Api.Engagement;
+using Muallimi.Api.Exams;
+using Muallimi.Api.Exams.ExamAdministration;
+using Muallimi.Api.Exams.ExamCreation;
+using Muallimi.Api.Exams.ExamResults;
+using Muallimi.Api.Announcements;
+using Muallimi.Api.Announcements.AnnouncementCreation;
+using Muallimi.Api.Announcements.AnnouncementDispatch;
+using Muallimi.Api.Leaderboards;
+using Muallimi.Api.Leaderboards.LeaderboardComputation;
+using Muallimi.Api.Leaderboards.LeaderboardQuery;
 using Muallimi.Api.StudentProgressSurface;
 using Muallimi.Api.Parents;
 using Muallimi.Api.Parents.OperatorImpersonation;
 using Muallimi.Api.Parents.ParentDashboard;
 using Muallimi.Api.Parents.ParentNotifications;
 using Muallimi.Api.Parents.ParentNotifications.Channels;
+using Muallimi.Api.SchoolManagement;
+using Muallimi.Api.SchoolManagement.AdminOnboarding;
+using Muallimi.Api.SchoolManagement.ClassManagement;
+using Muallimi.Api.SchoolManagement.DownstreamEvents;
+using Muallimi.Api.SchoolManagement.Licensing;
+using Muallimi.Api.SchoolManagement.Phase4EventConsumer;
+using Muallimi.Api.SchoolManagement.RosterImport;
+using Muallimi.Api.SchoolManagement.SchoolDashboard;
+using Muallimi.Api.SchoolManagement.SchoolTenantProvisioning;
+using Muallimi.Api.SchoolManagement.TeacherAssignment;
+using Muallimi.Api.SchoolManagement.TeacherDashboard;
+using Muallimi.Api.SchoolReports;
+using Muallimi.Api.SchoolReports.ReportAggregation;
+using Muallimi.Api.SchoolReports.ReportExport;
 using Muallimi.Api.PromptAudit;
 using Muallimi.Api.ProviderBindings;
 using Muallimi.Api.Publication;
@@ -221,6 +245,77 @@ builder.Services.AddPhase4AtRiskDetectionOrchestrator();
 builder.Services.Configure<AtRiskDetectionJobOptions>(_ => { });
 builder.Services.AddPhase4AtRiskDetectionJob();
 
+// Phase 5 (US1) — School tenant provisioning + admin onboarding.
+builder.Services.AddPhase5DownstreamEventOutbox();
+builder.Services.AddPhase5SchoolTenantRepository();
+builder.Services.AddPhase5SchoolAdminRepository();
+builder.Services.AddPhase5SchoolTenantProvisioningService();
+builder.Services.AddPhase5AdminOnboardingService();
+
+// Phase 5 (US2) — Roster import + student onboarding.
+builder.Services.AddPhase5RosterImportRepository();
+builder.Services.AddPhase5RosterFileStore();
+builder.Services.AddPhase5RosterFileParser();
+builder.Services.AddPhase5RosterRowValidator();
+builder.Services.AddPhase5StudentProfileLinker();
+builder.Services.AddPhase5RosterImportWorker();
+
+// Phase 5 (US3) — Class / enrolment / teacher assignment management.
+builder.Services.AddPhase5ClassGroupRepository();
+builder.Services.AddPhase5ClassEnrolmentRepository();
+builder.Services.AddPhase5TeacherRepository();
+builder.Services.AddPhase5ClassManagementService();
+builder.Services.AddPhase5TeacherAssignmentService();
+
+// Phase 5 (US4) — School admin dashboard + Phase 4 event consumption.
+builder.Services.AddPhase5SchoolDashboardQueryCache();
+builder.Services.AddPhase5SchoolOperatorImpersonationAuditor();
+builder.Services.AddPhase5SchoolAggregateViewRepository();
+builder.Services.AddPhase5SchoolDashboardService();
+builder.Services.AddPhase5SchoolAggregateViewUpdater();
+builder.Services.AddPhase5Phase4EventConsumer();
+
+// Phase 5 (US5) — Teacher dashboard + at-risk notification hook.
+builder.Services.AddPhase5TeacherDashboardService();
+builder.Services.AddPhase5TeacherAtRiskNotificationHook();
+
+// Phase 5 (US6) — Exams (creation + administration + results).
+builder.Services.AddPhase5ExamRepository();
+builder.Services.AddPhase5ExamQuestionRepository();
+builder.Services.AddPhase5ExamSubmissionRepository();
+builder.Services.AddPhase5CustomQuestionGuardrailValidator();
+builder.Services.AddPhase5ExamCreationService();
+builder.Services.AddPhase5ExamEventEmitter();
+builder.Services.AddPhase5ExamAutoGrader();
+
+// Phase 5 (US7) — Leaderboards with privacy controls.
+builder.Services.AddPhase5LeaderboardSnapshotRepository();
+builder.Services.AddPhase5LeaderboardConfigRepository();
+builder.Services.AddPhase5LeaderboardComputationService();
+
+// Phase 5 (US8) — Announcements + school communication.
+builder.Services.AddPhase5AnnouncementRepository();
+builder.Services.AddPhase5AnnouncementTargetResolver();
+builder.Services.AddPhase5AnnouncementDispatcher();
+// Scheduler is disabled by default; smoke script + integration tests drive
+// RunOnceAsync directly. Production re-enables via configuration.
+builder.Services.Configure<AnnouncementSchedulerOptions>(_ => { });
+builder.Services.AddPhase5AnnouncementScheduler();
+
+// Phase 5 (US9) — School reports + exportable analytics.
+builder.Services.AddPhase5SchoolReportRepository();
+builder.Services.AddPhase5SchoolReportAggregator();
+builder.Services.AddPhase5SchoolReportExporter();
+// Generation job disabled by default; tests + smoke script drive RunOnceAsync.
+builder.Services.Configure<SchoolReportGenerationJobOptions>(_ => { });
+builder.Services.AddPhase5SchoolReportGenerationJob();
+
+// Phase 5 (US10) — Licensing, seat management, entitlement enforcement.
+builder.Services.AddPhase5SchoolLicenseRepository();
+builder.Services.AddPhase5SeatWarningNotifier();
+builder.Services.AddPhase5LicenseManagementService();
+builder.Services.AddPhase5FeatureGateEvaluator();
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -262,6 +357,21 @@ app.MapParents();
 
 // ── Phase 4 US3: Weekly report view / share / regenerate + shared-report public route ──
 app.MapEngagement();
+
+// ── Phase 5 US1: School tenant provisioning + admin onboarding + school config ──
+app.MapSchoolManagement();
+
+// ── Phase 5 US6: Exam creation, administration, results ──
+app.MapExams();
+
+// ── Phase 5 US7: Leaderboards config + role-scoped queries ──
+app.MapLeaderboards();
+
+// ── Phase 5 US8: Announcements + school communication ──
+app.MapAnnouncements();
+
+// ── Phase 5 US9: School reports + exportable analytics ──
+app.MapSchoolReports();
 
 // ── Curriculum Admin API: Upload & Ingestion ──
 

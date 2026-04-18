@@ -11,6 +11,7 @@ using Muallimi.Domain.Publication;
 using Muallimi.Domain.Review;
 using Muallimi.Domain.Engagement;
 using Muallimi.Domain.Parents;
+using Muallimi.Domain.SchoolManagement;
 using Muallimi.Domain.Shared;
 using Muallimi.Domain.StudentExperience;
 
@@ -111,6 +112,27 @@ public class MuallimiDbContext : DbContext
     public DbSet<ParentNotification> ParentNotifications => Set<ParentNotification>();
     public DbSet<OperatorImpersonationAudit> OperatorImpersonationAudits => Set<OperatorImpersonationAudit>();
     public DbSet<ProgressIngestionDeadLetter> ProgressIngestionDeadLetters => Set<ProgressIngestionDeadLetter>();
+
+    // ── Phase 5: School Management and B2B Administration ──
+    public DbSet<SchoolTenant> SchoolTenants => Set<SchoolTenant>();
+    public DbSet<SchoolAdministrator> SchoolAdministrators => Set<SchoolAdministrator>();
+    public DbSet<Teacher> Teachers => Set<Teacher>();
+    public DbSet<ClassGroup> ClassGroups => Set<ClassGroup>();
+    public DbSet<ClassEnrolment> ClassEnrolments => Set<ClassEnrolment>();
+    public DbSet<TeacherAssignment> TeacherAssignments => Set<TeacherAssignment>();
+    public DbSet<RosterImport> RosterImports => Set<RosterImport>();
+    public DbSet<Exam> Exams => Set<Exam>();
+    public DbSet<ExamQuestion> ExamQuestions => Set<ExamQuestion>();
+    public DbSet<ExamAssignment> ExamAssignments => Set<ExamAssignment>();
+    public DbSet<ExamSubmission> ExamSubmissions => Set<ExamSubmission>();
+    public DbSet<LeaderboardSnapshot> LeaderboardSnapshots => Set<LeaderboardSnapshot>();
+    public DbSet<LeaderboardConfig> LeaderboardConfigs => Set<LeaderboardConfig>();
+    public DbSet<Announcement> Announcements => Set<Announcement>();
+    public DbSet<AnnouncementDelivery> AnnouncementDeliveries => Set<AnnouncementDelivery>();
+    public DbSet<SchoolReport> SchoolReports => Set<SchoolReport>();
+    public DbSet<SchoolLicense> SchoolLicenses => Set<SchoolLicense>();
+    public DbSet<SchoolAggregateView> SchoolAggregateViews => Set<SchoolAggregateView>();
+    public DbSet<Phase5DownstreamEvent> Phase5DownstreamEvents => Set<Phase5DownstreamEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -550,6 +572,9 @@ public class MuallimiDbContext : DbContext
 
         ConfigurePhase4(modelBuilder);
         ApplyPhase4TenantFilters(modelBuilder);
+
+        ConfigurePhase5(modelBuilder);
+        ApplyPhase5TenantFilters(modelBuilder);
     }
 
     private static void ConfigurePhase3(ModelBuilder modelBuilder)
@@ -1110,5 +1135,383 @@ public class MuallimiDbContext : DbContext
         ApplyTenantFilter<ChildLink>(modelBuilder);
         ApplyTenantFilter<ParentNotification>(modelBuilder);
         ApplyTenantFilter<OperatorImpersonationAudit>(modelBuilder);
+    }
+
+    private static void ConfigurePhase5(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SchoolTenant>(e =>
+        {
+            e.ToTable("school_tenants");
+            e.HasKey(x => x.SchoolTenantId);
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolNameAr).HasColumnName("school_name_ar");
+            e.Property(x => x.SchoolNameEn).HasColumnName("school_name_en");
+            e.Property(x => x.CurriculumType).HasColumnName("curriculum_type");
+            e.Property(x => x.GradeRangeStart).HasColumnName("grade_range_start");
+            e.Property(x => x.GradeRangeEnd).HasColumnName("grade_range_end");
+            e.Property(x => x.SubjectBindings).HasColumnName("subject_bindings").HasColumnType("jsonb");
+            e.Property(x => x.AcademicCalendar).HasColumnName("academic_calendar").HasColumnType("jsonb");
+            e.Property(x => x.PreferredLanguage).HasColumnName("preferred_language");
+            e.Property(x => x.SubscriptionStatus).HasColumnName("subscription_status");
+            e.Property(x => x.CreatedByOperatorId).HasColumnName("created_by_operator_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.TenantId);
+        });
+
+        modelBuilder.Entity<SchoolAdministrator>(e =>
+        {
+            e.ToTable("school_administrators");
+            e.HasKey(x => x.SchoolAdminId);
+            e.Property(x => x.SchoolAdminId).HasColumnName("school_admin_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.UserIdentityId).HasColumnName("user_identity_id");
+            e.Property(x => x.InvitationEmail).HasColumnName("invitation_email");
+            e.Property(x => x.OnboardingStatus).HasColumnName("onboarding_status");
+            e.Property(x => x.TermsAcceptedAt).HasColumnName("terms_accepted_at");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.UserIdentityId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Teacher>(e =>
+        {
+            e.ToTable("teachers");
+            e.HasKey(x => x.TeacherId);
+            e.Property(x => x.TeacherId).HasColumnName("teacher_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.UserIdentityId).HasColumnName("user_identity_id");
+            e.Property(x => x.DisplayNameAr).HasColumnName("display_name_ar");
+            e.Property(x => x.DisplayNameEn).HasColumnName("display_name_en");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.UserIdentityId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ClassGroup>(e =>
+        {
+            e.ToTable("class_groups");
+            e.HasKey(x => x.ClassGroupId);
+            e.Property(x => x.ClassGroupId).HasColumnName("class_group_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.Grade).HasColumnName("grade");
+            e.Property(x => x.SectionLabel).HasColumnName("section_label");
+            e.Property(x => x.DisplayNameAr).HasColumnName("display_name_ar");
+            e.Property(x => x.DisplayNameEn).HasColumnName("display_name_en");
+            e.Property(x => x.SubjectBindings).HasColumnName("subject_bindings").HasColumnType("jsonb");
+            e.Property(x => x.AcademicYear).HasColumnName("academic_year");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.Grade, x.SectionLabel, x.AcademicYear }).IsUnique();
+        });
+
+        modelBuilder.Entity<ClassEnrolment>(e =>
+        {
+            e.ToTable("class_enrolments");
+            e.HasKey(x => x.ClassEnrolmentId);
+            e.Property(x => x.ClassEnrolmentId).HasColumnName("class_enrolment_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ClassGroupId).HasColumnName("class_group_id");
+            e.Property(x => x.StudentId).HasColumnName("student_id");
+            e.Property(x => x.EnrolledAt).HasColumnName("enrolled_at");
+            e.Property(x => x.UnenrolledAt).HasColumnName("unenrolled_at");
+            e.Property(x => x.TransferToClassId).HasColumnName("transfer_to_class_id");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.HasIndex(x => new { x.ClassGroupId, x.StudentId, x.Status });
+        });
+
+        modelBuilder.Entity<TeacherAssignment>(e =>
+        {
+            e.ToTable("teacher_assignments");
+            e.HasKey(x => x.TeacherAssignmentId);
+            e.Property(x => x.TeacherAssignmentId).HasColumnName("teacher_assignment_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.TeacherId).HasColumnName("teacher_id");
+            e.Property(x => x.ClassGroupId).HasColumnName("class_group_id");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.AssignedAt).HasColumnName("assigned_at");
+            e.Property(x => x.UnassignedAt).HasColumnName("unassigned_at");
+            e.HasIndex(x => new { x.TeacherId, x.ClassGroupId, x.SubjectId });
+        });
+
+        modelBuilder.Entity<RosterImport>(e =>
+        {
+            e.ToTable("roster_imports");
+            e.HasKey(x => x.RosterImportId);
+            e.Property(x => x.RosterImportId).HasColumnName("roster_import_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.UploadedByAdminId).HasColumnName("uploaded_by_admin_id");
+            e.Property(x => x.SourceFileBlobKey).HasColumnName("source_file_blob_key");
+            e.Property(x => x.OriginalFileName).HasColumnName("original_file_name");
+            e.Property(x => x.TotalRowCount).HasColumnName("total_row_count");
+            e.Property(x => x.SuccessCount).HasColumnName("success_count");
+            e.Property(x => x.ErrorCount).HasColumnName("error_count");
+            e.Property(x => x.SkipCount).HasColumnName("skip_count");
+            e.Property(x => x.ErrorReportBlobKey).HasColumnName("error_report_blob_key");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.StartedAt).HasColumnName("started_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.CreatedAt });
+        });
+
+        modelBuilder.Entity<Exam>(e =>
+        {
+            e.ToTable("exams");
+            e.HasKey(x => x.ExamId);
+            e.Property(x => x.ExamId).HasColumnName("exam_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.CreatedByTeacherId).HasColumnName("created_by_teacher_id");
+            e.Property(x => x.CreatedByAdminId).HasColumnName("created_by_admin_id");
+            e.Property(x => x.TitleAr).HasColumnName("title_ar");
+            e.Property(x => x.TitleEn).HasColumnName("title_en");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.Grade).HasColumnName("grade");
+            e.Property(x => x.TopicBindings).HasColumnName("topic_bindings").HasColumnType("jsonb");
+            e.Property(x => x.ScheduledStart).HasColumnName("scheduled_start");
+            e.Property(x => x.ScheduledEnd).HasColumnName("scheduled_end");
+            e.Property(x => x.DurationMinutes).HasColumnName("duration_minutes");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.TotalPoints).HasColumnName("total_points").HasColumnType("numeric(9,2)");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.Status });
+        });
+
+        modelBuilder.Entity<ExamQuestion>(e =>
+        {
+            e.ToTable("exam_questions");
+            e.HasKey(x => x.ExamQuestionId);
+            e.Property(x => x.ExamQuestionId).HasColumnName("exam_question_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ExamId).HasColumnName("exam_id");
+            e.Property(x => x.QuestionSource).HasColumnName("question_source");
+            e.Property(x => x.Phase1ContentId).HasColumnName("phase1_content_id");
+            e.Property(x => x.QuestionTextAr).HasColumnName("question_text_ar");
+            e.Property(x => x.QuestionTextEn).HasColumnName("question_text_en");
+            e.Property(x => x.QuestionType).HasColumnName("question_type");
+            e.Property(x => x.Options).HasColumnName("options").HasColumnType("jsonb");
+            e.Property(x => x.CorrectAnswer).HasColumnName("correct_answer").HasColumnType("jsonb");
+            e.Property(x => x.Points).HasColumnName("points").HasColumnType("numeric(6,2)");
+            e.Property(x => x.DisplayOrder).HasColumnName("display_order");
+            e.Property(x => x.GuardrailDecisionTrailId).HasColumnName("guardrail_decision_trail_id");
+            e.HasIndex(x => new { x.ExamId, x.DisplayOrder });
+        });
+
+        modelBuilder.Entity<ExamAssignment>(e =>
+        {
+            e.ToTable("exam_assignments");
+            e.HasKey(x => x.ExamAssignmentId);
+            e.Property(x => x.ExamAssignmentId).HasColumnName("exam_assignment_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ExamId).HasColumnName("exam_id");
+            e.Property(x => x.ClassGroupId).HasColumnName("class_group_id");
+            e.Property(x => x.AssignedAt).HasColumnName("assigned_at");
+            e.HasIndex(x => new { x.ExamId, x.ClassGroupId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ExamSubmission>(e =>
+        {
+            e.ToTable("exam_submissions");
+            e.HasKey(x => x.ExamSubmissionId);
+            e.Property(x => x.ExamSubmissionId).HasColumnName("exam_submission_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ExamId).HasColumnName("exam_id");
+            e.Property(x => x.StudentId).HasColumnName("student_id");
+            e.Property(x => x.Answers).HasColumnName("answers").HasColumnType("jsonb");
+            e.Property(x => x.Score).HasColumnName("score").HasColumnType("numeric(9,2)");
+            e.Property(x => x.MaxScore).HasColumnName("max_score").HasColumnType("numeric(9,2)");
+            e.Property(x => x.GradingStatus).HasColumnName("grading_status");
+            e.Property(x => x.StartedAt).HasColumnName("started_at");
+            e.Property(x => x.SubmittedAt).HasColumnName("submitted_at");
+            e.Property(x => x.GradedAt).HasColumnName("graded_at");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.HasIndex(x => new { x.ExamId, x.StudentId }).IsUnique();
+        });
+
+        modelBuilder.Entity<LeaderboardSnapshot>(e =>
+        {
+            e.ToTable("leaderboard_snapshots");
+            e.HasKey(x => x.LeaderboardSnapshotId);
+            e.Property(x => x.LeaderboardSnapshotId).HasColumnName("leaderboard_snapshot_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.ScopeType).HasColumnName("scope_type");
+            e.Property(x => x.ScopeId).HasColumnName("scope_id");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.Metric).HasColumnName("metric");
+            e.Property(x => x.WindowStart).HasColumnName("window_start");
+            e.Property(x => x.WindowEnd).HasColumnName("window_end");
+            e.Property(x => x.Entries).HasColumnName("entries").HasColumnType("jsonb");
+            e.Property(x => x.PrivacyMode).HasColumnName("privacy_mode");
+            e.Property(x => x.ComputedAt).HasColumnName("computed_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.ScopeType, x.ScopeId, x.Metric, x.ComputedAt });
+        });
+
+        modelBuilder.Entity<LeaderboardConfig>(e =>
+        {
+            e.ToTable("leaderboard_configs");
+            e.HasKey(x => x.LeaderboardConfigId);
+            e.Property(x => x.LeaderboardConfigId).HasColumnName("leaderboard_config_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.PrivacyMode).HasColumnName("privacy_mode");
+            e.Property(x => x.LeaderboardEnabled).HasColumnName("leaderboard_enabled");
+            e.Property(x => x.PerClassOverridesJson).HasColumnName("per_class_overrides").HasColumnType("jsonb");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.SchoolTenantId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Announcement>(e =>
+        {
+            e.ToTable("announcements");
+            e.HasKey(x => x.AnnouncementId);
+            e.Property(x => x.AnnouncementId).HasColumnName("announcement_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.CreatedById).HasColumnName("created_by_id");
+            e.Property(x => x.TargetScope).HasColumnName("target_scope");
+            e.Property(x => x.TargetId).HasColumnName("target_id");
+            e.Property(x => x.TargetGrade).HasColumnName("target_grade");
+            e.Property(x => x.TitleAr).HasColumnName("title_ar");
+            e.Property(x => x.TitleEn).HasColumnName("title_en");
+            e.Property(x => x.BodyAr).HasColumnName("body_ar");
+            e.Property(x => x.BodyEn).HasColumnName("body_en");
+            e.Property(x => x.Attachments).HasColumnName("attachments").HasColumnType("jsonb");
+            e.Property(x => x.ScheduledPublishAt).HasColumnName("scheduled_publish_at");
+            e.Property(x => x.PublishedAt).HasColumnName("published_at");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.Status });
+        });
+
+        modelBuilder.Entity<AnnouncementDelivery>(e =>
+        {
+            e.ToTable("announcement_deliveries");
+            e.HasKey(x => x.AnnouncementDeliveryId);
+            e.Property(x => x.AnnouncementDeliveryId).HasColumnName("announcement_delivery_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.AnnouncementId).HasColumnName("announcement_id");
+            e.Property(x => x.RecipientId).HasColumnName("recipient_id");
+            e.Property(x => x.RecipientRole).HasColumnName("recipient_role");
+            e.Property(x => x.Channel).HasColumnName("channel");
+            e.Property(x => x.DeliveryStatus).HasColumnName("delivery_status");
+            e.Property(x => x.DeliveredAt).HasColumnName("delivered_at");
+            e.Property(x => x.ReadAt).HasColumnName("read_at");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.HasIndex(x => new { x.AnnouncementId, x.RecipientId });
+        });
+
+        modelBuilder.Entity<SchoolReport>(e =>
+        {
+            e.ToTable("school_reports");
+            e.HasKey(x => x.SchoolReportId);
+            e.Property(x => x.SchoolReportId).HasColumnName("school_report_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.GeneratedByAdminId).HasColumnName("generated_by_admin_id");
+            e.Property(x => x.ReportType).HasColumnName("report_type");
+            e.Property(x => x.GradeFilter).HasColumnName("grade_filter");
+            e.Property(x => x.SubjectFilter).HasColumnName("subject_filter");
+            e.Property(x => x.ClassFilter).HasColumnName("class_filter");
+            e.Property(x => x.WindowStart).HasColumnName("window_start");
+            e.Property(x => x.WindowEnd).HasColumnName("window_end");
+            e.Property(x => x.Language).HasColumnName("language");
+            e.Property(x => x.ExportBlobKey).HasColumnName("export_blob_key");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.HasIndex(x => new { x.SchoolTenantId, x.CreatedAt });
+        });
+
+        modelBuilder.Entity<SchoolLicense>(e =>
+        {
+            e.ToTable("school_licenses");
+            e.HasKey(x => x.SchoolLicenseId);
+            e.Property(x => x.SchoolLicenseId).HasColumnName("school_license_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.PlanTier).HasColumnName("plan_tier");
+            e.Property(x => x.SeatLimit).HasColumnName("seat_limit");
+            e.Property(x => x.SeatsUsed).HasColumnName("seats_used");
+            e.Property(x => x.FeatureGates).HasColumnName("feature_gates").HasColumnType("jsonb");
+            e.Property(x => x.SubscriptionStart).HasColumnName("subscription_start");
+            e.Property(x => x.SubscriptionEnd).HasColumnName("subscription_end");
+            e.Property(x => x.IsTrial).HasColumnName("is_trial");
+            e.Property(x => x.SeatWarningThreshold).HasColumnName("seat_warning_threshold");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.SchoolTenantId).IsUnique();
+        });
+
+        modelBuilder.Entity<SchoolAggregateView>(e =>
+        {
+            e.ToTable("school_aggregate_views");
+            e.HasKey(x => x.AggregateViewId);
+            e.Property(x => x.AggregateViewId).HasColumnName("aggregate_view_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.ScopeType).HasColumnName("scope_type");
+            e.Property(x => x.ScopeId).HasColumnName("scope_id");
+            e.Property(x => x.Grade).HasColumnName("grade");
+            e.Property(x => x.SubjectId).HasColumnName("subject_id");
+            e.Property(x => x.ActiveStudentCount).HasColumnName("active_student_count");
+            e.Property(x => x.AverageMastery).HasColumnName("average_mastery").HasColumnType("numeric(6,4)");
+            e.Property(x => x.AtRiskCount).HasColumnName("at_risk_count");
+            e.Property(x => x.ActiveStreakCount).HasColumnName("active_streak_count");
+            e.Property(x => x.BadgesAwardedCount).HasColumnName("badges_awarded_count");
+            e.Property(x => x.LastUpdatedAt).HasColumnName("last_updated_at");
+            e.Property(x => x.LastEventId).HasColumnName("last_event_id");
+            e.HasIndex(x => new { x.SchoolTenantId, x.ScopeType, x.ScopeId, x.SubjectId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Phase5DownstreamEvent>(e =>
+        {
+            e.ToTable("phase5_downstream_events");
+            e.HasKey(x => x.Phase5EventId);
+            e.Property(x => x.Phase5EventId).HasColumnName("phase5_event_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.SchoolTenantId).HasColumnName("school_tenant_id");
+            e.Property(x => x.EventKind).HasColumnName("event_kind");
+            e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
+            e.Property(x => x.SchemaVersion).HasColumnName("schema_version");
+            e.Property(x => x.DeliveryState).HasColumnName("delivery_state");
+            e.Property(x => x.DispatchAttempts).HasColumnName("dispatch_attempts");
+            e.HasIndex(x => new { x.DeliveryState, x.OccurredAt });
+            e.HasIndex(x => x.CorrelationId);
+        });
+    }
+
+    private void ApplyPhase5TenantFilters(ModelBuilder modelBuilder)
+    {
+        ApplyTenantFilter<SchoolTenant>(modelBuilder);
+        ApplyTenantFilter<SchoolAdministrator>(modelBuilder);
+        ApplyTenantFilter<Teacher>(modelBuilder);
+        ApplyTenantFilter<ClassGroup>(modelBuilder);
+        ApplyTenantFilter<ClassEnrolment>(modelBuilder);
+        ApplyTenantFilter<TeacherAssignment>(modelBuilder);
+        ApplyTenantFilter<RosterImport>(modelBuilder);
+        ApplyTenantFilter<Exam>(modelBuilder);
+        ApplyTenantFilter<ExamQuestion>(modelBuilder);
+        ApplyTenantFilter<ExamAssignment>(modelBuilder);
+        ApplyTenantFilter<ExamSubmission>(modelBuilder);
+        ApplyTenantFilter<LeaderboardSnapshot>(modelBuilder);
+        ApplyTenantFilter<LeaderboardConfig>(modelBuilder);
+        ApplyTenantFilter<Announcement>(modelBuilder);
+        ApplyTenantFilter<AnnouncementDelivery>(modelBuilder);
+        ApplyTenantFilter<SchoolReport>(modelBuilder);
+        ApplyTenantFilter<SchoolLicense>(modelBuilder);
+        ApplyTenantFilter<SchoolAggregateView>(modelBuilder);
+        ApplyTenantFilter<Phase5DownstreamEvent>(modelBuilder);
     }
 }

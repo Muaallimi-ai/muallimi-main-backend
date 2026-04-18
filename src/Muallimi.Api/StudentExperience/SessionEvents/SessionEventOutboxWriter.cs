@@ -32,6 +32,10 @@ public enum SessionEventKind
     homework_help_used,
     whiteboard_session,
     session_end,
+    // Phase 5: exam submissions feed into the same mastery pipeline via the
+    // Phase 3 event transport. Additive-only per the Phase 4 downstream
+    // contract — consumers ignore unknown kinds.
+    exam_answered,
 }
 
 public record CurriculumScope(

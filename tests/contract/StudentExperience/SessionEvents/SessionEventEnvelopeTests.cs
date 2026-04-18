@@ -30,10 +30,16 @@ public class SessionEventEnvelopeTests
     private static readonly Guid CorrelationId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
     [Fact]
-    public void Envelope_Enumerates_Eleven_Event_Kinds_In_Contract_Order()
+    public void Envelope_Enumerates_Event_Kinds_In_Contract_Order()
     {
+        // Phase 3 defined the first 11 kinds. Phase 5 adds `exam_answered`
+        // at the end as an additive-only extension (exam submissions feed
+        // into the same Phase 4 mastery pipeline through the Phase 3 event
+        // transport). The additive-only rule from the Phase 4 downstream
+        // contract applies to this enum as well: consumers MUST ignore
+        // unknown kinds.
         var kinds = Enum.GetNames<SessionEventKind>();
-        Assert.Equal(11, kinds.Length);
+        Assert.Equal(12, kinds.Length);
         Assert.Equal(new[]
         {
             "session_start",
@@ -47,6 +53,7 @@ public class SessionEventEnvelopeTests
             "homework_help_used",
             "whiteboard_session",
             "session_end",
+            "exam_answered",
         }, kinds);
     }
 
