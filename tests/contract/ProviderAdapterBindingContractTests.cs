@@ -29,7 +29,7 @@ public class ProviderAdapterBindingContractTests
             capability: Capabilities.LlmLightweight,
             environment: Environments.Local,
             curriculumScope: "global",
-            providerIdentifier: "local-ollama-lightweight");
+            providerIdentifier: "anthropic-lightweight");
 
         Assert.Null(binding.CurriculumScope);
         Assert.False(binding.Active);
@@ -71,7 +71,7 @@ public class ProviderAdapterBindingContractTests
     public void Activate_Then_Deactivate_Toggles_The_Active_Flag()
     {
         var binding = ProviderAdapterBinding.Create(
-            Capabilities.LlmLightweight, Environments.Local, null, "local-ollama-lightweight");
+            Capabilities.LlmLightweight, Environments.Local, null, "anthropic-lightweight");
 
         Assert.False(binding.Active);
         binding.Activate();
@@ -168,24 +168,24 @@ public class ProviderAdapterBindingContractTests
             Capability: Capabilities.LlmLightweight,
             Environment: Environments.Local,
             CurriculumScope: null,
-            ProviderIdentifier: "local-ollama-lightweight",
+            ProviderIdentifier: "anthropic-lightweight",
             Active: false,
             ActorId: "ops-1", CorrelationId: "corr-1", OccurredAt: DateTime.UtcNow));
 
         await publisher.PublishAsync(new ProviderBindingUpdatedEvent(
             Guid.NewGuid().ToString("N"), ProviderBindingEventTypes.Activated,
             Guid.NewGuid(), Capabilities.LlmLightweight, Environments.Local, null,
-            "local-ollama-lightweight", true, "ops-1", "corr-2", DateTime.UtcNow));
+            "anthropic-lightweight", true, "ops-1", "corr-2", DateTime.UtcNow));
 
         await publisher.PublishAsync(new ProviderBindingUpdatedEvent(
             Guid.NewGuid().ToString("N"), ProviderBindingEventTypes.FallbackUpdated,
             Guid.NewGuid(), Capabilities.LlmLightweight, Environments.Local, null,
-            "local-ollama-lightweight", true, "ops-1", "corr-3", DateTime.UtcNow));
+            "anthropic-lightweight", true, "ops-1", "corr-3", DateTime.UtcNow));
 
         await publisher.PublishAsync(new ProviderBindingUpdatedEvent(
             Guid.NewGuid().ToString("N"), ProviderBindingEventTypes.Deactivated,
             Guid.NewGuid(), Capabilities.LlmLightweight, Environments.Local, null,
-            "local-ollama-lightweight", false, "ops-1", "corr-4", DateTime.UtcNow));
+            "anthropic-lightweight", false, "ops-1", "corr-4", DateTime.UtcNow));
 
         Assert.Equal(4, publisher.Published.Count);
         Assert.Contains(publisher.Published, e => e.EventType == ProviderBindingEventTypes.Created);

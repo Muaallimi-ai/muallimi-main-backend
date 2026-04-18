@@ -1,6 +1,23 @@
 using Muallimi.Api.AiOperations;
 using Muallimi.Api.Audit;
 using Muallimi.Api.Coverage;
+using Muallimi.Api.Engagement.AtRiskDetection;
+using Muallimi.Api.Engagement.BadgeAwarding;
+using Muallimi.Api.Engagement.DownstreamEvents;
+using Muallimi.Api.Engagement.FocusAreas;
+using Muallimi.Api.Engagement.InterventionPrompts;
+using Muallimi.Api.Engagement.MasteryCalculation;
+using Muallimi.Api.Engagement.Observability;
+using Muallimi.Api.Engagement.ProgressIngestion;
+using Muallimi.Api.Engagement.StreakCalculation;
+using Muallimi.Api.Engagement.WeeklyReports;
+using Muallimi.Api.Engagement;
+using Muallimi.Api.StudentProgressSurface;
+using Muallimi.Api.Parents;
+using Muallimi.Api.Parents.OperatorImpersonation;
+using Muallimi.Api.Parents.ParentDashboard;
+using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Api.Parents.ParentNotifications.Channels;
 using Muallimi.Api.PromptAudit;
 using Muallimi.Api.ProviderBindings;
 using Muallimi.Api.Publication;
@@ -131,6 +148,79 @@ builder.Services.AddPhase3MockTest();
 builder.Services.AddPhase3HomeworkHelp();
 builder.Services.AddPhase3Whiteboard();
 
+// Phase 4 (US4) — engagement ingestion + mastery/streak/badge pipeline.
+builder.Services.AddPhase4CorrelationIdPropagator();
+builder.Services.AddPhase4FamilyTimezoneResolver();
+builder.Services.AddPhase4ProgressRecordRepository();
+builder.Services.AddPhase4MasteryStateRepository();
+builder.Services.AddPhase4StreakStateRepository();
+builder.Services.AddPhase4BadgeCriterionRepository();
+builder.Services.AddPhase4BadgeAwardRepository();
+builder.Services.AddPhase4BadgeCriterionCatalogueLoader();
+builder.Services.AddPhase4MasteryCalculator();
+builder.Services.AddPhase4StreakCalculator();
+builder.Services.AddPhase4BadgeEvaluator();
+builder.Services.AddPhase4ProgressIngestionDeadLetterStore();
+builder.Services.AddPhase4DownstreamEventOutbox();
+builder.Services.AddPhase4DownstreamEventEmitter();
+builder.Services.AddPhase4DownstreamEventDispatcher();
+builder.Services.AddPhase4ProgressIngestionWorker();
+builder.Services.AddPhase4Phase3EventConsumer();
+builder.Services.AddPhase4StudentProgressService();
+
+// Phase 4 (US2) — Parent dashboard + child selector + operator impersonation audit.
+builder.Services.AddPhase4DashboardQueryCache();
+builder.Services.AddPhase4ChildLinkResolver();
+builder.Services.AddPhase4ChildLinkRepository();
+builder.Services.AddPhase4ParentProfileRepository();
+builder.Services.AddPhase4ParentDashboardService();
+builder.Services.AddPhase4OperatorImpersonationAuditor();
+
+// Phase 4 (US3) — Weekly report generation, viewing, sharing, regeneration.
+builder.Services.AddPhase4TutorRuntimeClient();
+builder.Services.AddPhase4CurriculumRetrievalClient();
+builder.Services.AddPhase4GuardrailDecisionTrailStore();
+builder.Services.AddPhase4WeeklyReportRepository();
+builder.Services.AddPhase4WeeklyReportAggregator();
+builder.Services.AddPhase4WeeklyReportSummaryGenerator();
+builder.Services.AddPhase4WeeklyReportEventEmitter();
+builder.Services.AddPhase4WeeklyReportGenerator();
+builder.Services.AddPhase4ShareTokenValidator();
+// Background job stays disabled by default; local runs drive generation
+// explicitly via IWeeklyReportGenerator / the regenerate endpoint.
+builder.Services.Configure<WeeklyReportGenerationJobOptions>(_ => { });
+builder.Services.AddPhase4WeeklyReportGenerationJob();
+
+// Phase 4 (US7) — Parent notifications + preferences + local channel stubs.
+builder.Services.AddPhase4ParentNotificationRepository();
+builder.Services.AddPhase4LocalNotificationChannelStubs();
+builder.Services.AddPhase4ParentNotificationDispatcher();
+builder.Services.AddPhase4NotificationSchedulerHook();
+
+// Phase 4 (US5) — Focus areas grounded in Phase 1 curriculum.
+builder.Services.AddPhase4FocusAreaRepository();
+builder.Services.AddPhase4FocusAreaSignalCollector();
+builder.Services.AddPhase4FocusAreaDeepLinkValidator();
+builder.Services.AddPhase4FocusAreaRationaleGenerator();
+builder.Services.AddPhase4FocusAreaCalculator();
+// Refresh job stays disabled by default; local runs drive RecomputeAsync
+// explicitly via IFocusAreaCalculator.
+builder.Services.Configure<FocusAreaRefreshJobOptions>(_ => { });
+builder.Services.AddPhase4FocusAreaRefreshJob();
+
+// Phase 4 (US8) — At-risk detection + intervention prompts.
+builder.Services.AddPhase4AtRiskFlagRepository();
+builder.Services.AddPhase4InterventionPromptRepository();
+builder.Services.AddPhase4AtRiskThresholdCatalogue();
+builder.Services.AddPhase4AtRiskEvaluator();
+builder.Services.AddPhase4InterventionPromptGenerator();
+builder.Services.AddPhase4AtRiskEventEmitter();
+builder.Services.AddPhase4AtRiskDetectionOrchestrator();
+// Detection job stays disabled by default; integration tests + the local
+// smoke script drive EvaluateStudentAsync directly.
+builder.Services.Configure<AtRiskDetectionJobOptions>(_ => { });
+builder.Services.AddPhase4AtRiskDetectionJob();
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -162,6 +252,16 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "mual
 
 // ── Phase 3 US1: Student Experience endpoints (session lifecycle + plan gate) ──
 app.MapStudentExperience();
+
+// ── Phase 4 US1: Student Progress Surface (mastery / streak / badges / focus areas) ──
+app.MapStudentProgressSurface();
+
+// ── Phase 4 US2: Operator impersonation middleware + Parent dashboard endpoints ──
+app.UseOperatorImpersonation();
+app.MapParents();
+
+// ── Phase 4 US3: Weekly report view / share / regenerate + shared-report public route ──
+app.MapEngagement();
 
 // ── Curriculum Admin API: Upload & Ingestion ──
 

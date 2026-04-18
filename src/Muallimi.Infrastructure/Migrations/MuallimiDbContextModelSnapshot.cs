@@ -24,6 +24,297 @@ namespace Muallimi.Infrastructure.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Muallimi.Domain.AiOperations.AiOperationsMetric", b =>
+                {
+                    b.Property<Guid>("MetricId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("metric_id");
+
+                    b.Property<double>("CacheHitRate")
+                        .HasColumnType("double precision")
+                        .HasColumnName("cache_hit_rate");
+
+                    b.Property<DateTime>("ComputedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("computed_at");
+
+                    b.Property<string>("CurriculumType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_type");
+
+                    b.Property<string>("Grade")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grade");
+
+                    b.Property<double>("GroundedAnswerRate")
+                        .HasColumnType("double precision")
+                        .HasColumnName("grounded_answer_rate");
+
+                    b.Property<string>("PerBranch")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("per_branch");
+
+                    b.Property<string>("PromptVersionDistribution")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("prompt_version_distribution");
+
+                    b.Property<double>("RefusalRate")
+                        .HasColumnType("double precision")
+                        .HasColumnName("refusal_rate");
+
+                    b.Property<string>("SessionMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("session_mode");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("TutorLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tutor_language");
+
+                    b.Property<long>("Volume")
+                        .HasColumnType("bigint")
+                        .HasColumnName("volume");
+
+                    b.Property<string>("WindowEnd")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("window_end");
+
+                    b.Property<string>("WindowStart")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("window_start");
+
+                    b.HasKey("MetricId");
+
+                    b.ToTable("ai_operations_metrics", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.AiOperations.AiRequestRecord", b =>
+                {
+                    b.Property<Guid>("RecordId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("record_id");
+
+                    b.Property<double?>("CacheMatchScore")
+                        .HasColumnType("double precision")
+                        .HasColumnName("cache_match_score");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("CurriculumType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_type");
+
+                    b.Property<string>("FinalOutcome")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("final_outcome");
+
+                    b.Property<string>("Grade")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grade");
+
+                    b.Property<int>("InputTokenCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("input_token_count");
+
+                    b.Property<int>("LatencyMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("latency_ms");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<int>("OutputTokenCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("output_token_count");
+
+                    b.Property<string>("PromptVersionsUsed")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("prompt_versions_used");
+
+                    b.Property<string>("QuestionTextPreview")
+                        .HasColumnType("text")
+                        .HasColumnName("question_text_preview");
+
+                    b.Property<string>("RoutingDecision")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("routing_decision");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("SessionMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("session_mode");
+
+                    b.Property<string>("Stages")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("stages");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TutorLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tutor_language");
+
+                    b.HasKey("RecordId");
+
+                    b.HasIndex("CorrelationId", "SessionId", "CurriculumType", "FinalOutcome");
+
+                    b.ToTable("ai_request_records", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.AiOperations.RedTeamEvaluationResult", b =>
+                {
+                    b.Property<Guid>("ResultId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("result_id");
+
+                    b.Property<string>("CorrelationId")
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<int>("FailCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("fail_count");
+
+                    b.Property<int>("PassCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("pass_count");
+
+                    b.Property<bool>("PromotionBlockFlag")
+                        .HasColumnType("boolean")
+                        .HasColumnName("promotion_block_flag");
+
+                    b.Property<string>("Regressions")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("regressions");
+
+                    b.Property<DateTime>("RunAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("run_at");
+
+                    b.Property<Guid>("SetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("set_id");
+
+                    b.Property<string>("SetVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("set_version");
+
+                    b.HasKey("ResultId");
+
+                    b.ToTable("red_team_evaluation_results", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.AiOperations.RedTeamScenarioSet", b =>
+                {
+                    b.Property<Guid>("SetId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("set_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("ScenarioCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("scenario_count");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("storage_key");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("version");
+
+                    b.HasKey("SetId");
+
+                    b.ToTable("red_team_scenario_sets", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.AiOperations.RefusalEvent", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("LocalisedReason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("localised_reason");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("ReasonCode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason_code");
+
+                    b.Property<Guid>("RecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("record_id");
+
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("stage");
+
+                    b.Property<string>("TutorLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tutor_language");
+
+                    b.HasKey("EventId");
+
+                    b.HasIndex("RecordId");
+
+                    b.ToTable("refusal_events", (string)null);
+                });
+
             modelBuilder.Entity("Muallimi.Domain.Content.AutoValidationResult", b =>
                 {
                     b.Property<Guid>("ResultId")
@@ -638,6 +929,1182 @@ namespace Muallimi.Infrastructure.Migrations
                     b.ToTable("qa_cache_entries", (string)null);
                 });
 
+            modelBuilder.Entity("Muallimi.Domain.Engagement.AtRiskFlag", b =>
+                {
+                    b.Property<Guid>("AtRiskFlagId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("at_risk_flag_id");
+
+                    b.Property<DateTime?>("AcknowledgedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("acknowledged_at");
+
+                    b.Property<Guid?>("AcknowledgedByParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("acknowledged_by_parent_profile_id");
+
+                    b.Property<DateTime?>("ClearedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cleared_at");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<Guid?>("LinkedInterventionPromptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("linked_intervention_prompt_id");
+
+                    b.Property<DateTime>("RaisedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("raised_at");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("ThresholdVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("threshold_version");
+
+                    b.Property<string>("TriggeringEvidence")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("triggering_evidence");
+
+                    b.HasKey("AtRiskFlagId");
+
+                    b.HasIndex("TenantId", "StudentId", "ClearedAt");
+
+                    b.ToTable("at_risk_flags", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.BadgeAward", b =>
+                {
+                    b.Property<Guid>("BadgeAwardId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("badge_award_id");
+
+                    b.Property<DateTime>("AwardedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("awarded_at");
+
+                    b.Property<Guid>("BadgeCriterionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("badge_criterion_id");
+
+                    b.Property<string>("BadgeCriterionVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("badge_criterion_version");
+
+                    b.Property<bool>("CelebrationShown")
+                        .HasColumnType("boolean")
+                        .HasColumnName("celebration_shown");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("OriginatingProgressRecordIds")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("originating_progress_record_ids");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("BadgeAwardId");
+
+                    b.HasIndex("TenantId", "StudentId", "BadgeCriterionId", "BadgeCriterionVersion")
+                        .IsUnique();
+
+                    b.ToTable("badge_awards", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.BadgeCriterion", b =>
+                {
+                    b.Property<Guid>("BadgeCriterionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("badge_criterion_id");
+
+                    b.Property<string>("BadgeKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("badge_key");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("category");
+
+                    b.Property<string>("DescriptionAr")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("description_ar");
+
+                    b.Property<string>("DescriptionEn")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("description_en");
+
+                    b.Property<string>("DisplayNameAr")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("display_name_ar");
+
+                    b.Property<string>("DisplayNameEn")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("display_name_en");
+
+                    b.Property<DateTime?>("RetiredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retired_at");
+
+                    b.Property<string>("Threshold")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("threshold");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("version");
+
+                    b.HasKey("BadgeCriterionId");
+
+                    b.HasIndex("BadgeKey", "Version")
+                        .IsUnique();
+
+                    b.ToTable("badge_criteria", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.FocusArea", b =>
+                {
+                    b.Property<Guid>("FocusAreaId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("focus_area_id");
+
+                    b.Property<Guid>("ChapterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("chapter_id");
+
+                    b.Property<DateTime>("ComputedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("computed_at");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("CurriculumType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_type");
+
+                    b.Property<Guid>("GuardrailDecisionTrailId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("guardrail_decision_trail_id");
+
+                    b.Property<string>("RationaleAr")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("rationale_ar");
+
+                    b.Property<string>("RationaleEn")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("rationale_en");
+
+                    b.Property<string>("SignalSummary")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("signal_summary");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_id");
+
+                    b.Property<string>("SuggestedNextStep")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("suggested_next_step");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("TopicId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTime>("ValidUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("valid_until");
+
+                    b.HasKey("FocusAreaId");
+
+                    b.HasIndex("TenantId", "StudentId");
+
+                    b.ToTable("focus_areas", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.GuardrailDecisionTrail", b =>
+                {
+                    b.Property<Guid>("GuardrailDecisionTrailId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("guardrail_decision_trail_id");
+
+                    b.Property<Guid>("ArtefactId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("artefact_id");
+
+                    b.Property<string>("ArtefactKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("artefact_kind");
+
+                    b.Property<DateTime>("CapturedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("captured_at");
+
+                    b.Property<string>("ChainOutput")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("chain_output");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("FinalStage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("final_stage");
+
+                    b.Property<string>("Language")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("language");
+
+                    b.Property<string>("PromptKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_key");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("GuardrailDecisionTrailId");
+
+                    b.HasIndex("ArtefactKind", "ArtefactId");
+
+                    b.ToTable("guardrail_decision_trails", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.InterventionPrompt", b =>
+                {
+                    b.Property<Guid>("InterventionPromptId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("intervention_prompt_id");
+
+                    b.Property<string>("BodyAr")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body_ar");
+
+                    b.Property<string>("BodyEn")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body_en");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("GuardrailDecisionTrailId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("guardrail_decision_trail_id");
+
+                    b.Property<string>("NextStep")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("next_step");
+
+                    b.Property<Guid?>("OriginatingFlagId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("originating_flag_id");
+
+                    b.Property<Guid?>("OriginatingFocusAreaId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("originating_focus_area_id");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("InterventionPromptId");
+
+                    b.HasIndex("TenantId", "StudentId", "CreatedAt");
+
+                    b.ToTable("intervention_prompts", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.MasteryState", b =>
+                {
+                    b.Property<Guid>("MasteryStateId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("mastery_state_id");
+
+                    b.Property<string>("CalculationVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("calculation_version");
+
+                    b.Property<int>("ContributingRecordCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("contributing_record_count");
+
+                    b.Property<string>("CurriculumType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_type");
+
+                    b.Property<string>("LastCorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("last_correlation_id");
+
+                    b.Property<DateTime>("LastUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_updated_at");
+
+                    b.Property<string>("MasteryBand")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("mastery_band");
+
+                    b.Property<decimal>("MasteryScore")
+                        .HasColumnType("numeric(6,4)")
+                        .HasColumnName("mastery_score");
+
+                    b.Property<DateTime?>("SampleWindowEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sample_window_end");
+
+                    b.Property<DateTime?>("SampleWindowStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sample_window_start");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid?>("TopicId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("MasteryStateId");
+
+                    b.HasIndex("TenantId", "StudentId", "SubjectId", "TopicId", "CalculationVersion")
+                        .IsUnique();
+
+                    b.ToTable("mastery_states", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.Phase4DownstreamEvent", b =>
+                {
+                    b.Property<Guid>("Phase4DownstreamEventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("phase4_downstream_event_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("DeliveryState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("delivery_state");
+
+                    b.Property<int>("DispatchAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("dispatch_attempts");
+
+                    b.Property<DateTime?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatched_at");
+
+                    b.Property<string>("EventKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_kind");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("scope");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("Phase4DownstreamEventId");
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("DeliveryState", "OccurredAt");
+
+                    b.ToTable("phase4_downstream_events", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.ProgressIngestionDeadLetter", b =>
+                {
+                    b.Property<Guid>("DeadLetterId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("dead_letter_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("Envelope")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("envelope");
+
+                    b.Property<string>("EventKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_kind");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("SourceEventId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source_event_id");
+
+                    b.Property<Guid?>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("DeadLetterId");
+
+                    b.HasIndex("Reason");
+
+                    b.HasIndex("TenantId", "RecordedAt");
+
+                    b.ToTable("progress_ingestion_dead_letters", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.ProgressRecord", b =>
+                {
+                    b.Property<Guid>("ProgressRecordId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("progress_record_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("CurriculumScope")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("curriculum_scope");
+
+                    b.Property<string>("EventKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_kind");
+
+                    b.Property<DateTime>("IngestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ingested_at");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("SourceEventId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source_event_id");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("ProgressRecordId");
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("TenantId", "SourceEventId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "StudentId");
+
+                    b.ToTable("progress_records", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.StreakState", b =>
+                {
+                    b.Property<Guid>("StreakStateId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("streak_state_id");
+
+                    b.Property<int>("CurrentLength")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_length");
+
+                    b.Property<string>("FamilyTimezone")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("family_timezone");
+
+                    b.Property<DateTime>("LastQualifyingDay")
+                        .HasColumnType("date")
+                        .HasColumnName("last_qualifying_day");
+
+                    b.Property<DateTime>("LastUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_updated_at");
+
+                    b.Property<int>("LongestLength")
+                        .HasColumnType("integer")
+                        .HasColumnName("longest_length");
+
+                    b.Property<string>("ResetHistory")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("reset_history");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("StreakStateId");
+
+                    b.HasIndex("TenantId", "StudentId")
+                        .IsUnique();
+
+                    b.ToTable("streak_states", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Engagement.WeeklyReport", b =>
+                {
+                    b.Property<Guid>("WeeklyReportId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("weekly_report_id");
+
+                    b.Property<string>("AwardedBadges")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("awarded_badges");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("EvidenceRefs")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("evidence_refs");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at");
+
+                    b.Property<Guid>("GuardrailDecisionTrailId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("guardrail_decision_trail_id");
+
+                    b.Property<string>("MasteryDeltas")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("mastery_deltas");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("ShareTokenHash")
+                        .HasColumnType("text")
+                        .HasColumnName("share_token_hash");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<string>("SummaryAr")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("summary_ar");
+
+                    b.Property<string>("SummaryEn")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("summary_en");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TopFocusAreas")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("top_focus_areas");
+
+                    b.Property<DateTime>("WindowEnd")
+                        .HasColumnType("date")
+                        .HasColumnName("window_end");
+
+                    b.Property<DateTime>("WindowStart")
+                        .HasColumnType("date")
+                        .HasColumnName("window_start");
+
+                    b.HasKey("WeeklyReportId");
+
+                    b.HasIndex("TenantId", "StudentId", "WindowStart", "WindowEnd")
+                        .IsUnique();
+
+                    b.ToTable("weekly_reports", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Parents.ChildLink", b =>
+                {
+                    b.Property<Guid>("ChildLinkId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_link_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("EffectiveEnd")
+                        .HasColumnType("date")
+                        .HasColumnName("effective_end");
+
+                    b.Property<DateTime>("EffectiveStart")
+                        .HasColumnType("date")
+                        .HasColumnName("effective_start");
+
+                    b.Property<Guid>("ParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_profile_id");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("role");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ChildLinkId");
+
+                    b.HasIndex("TenantId", "ParentProfileId", "StudentId")
+                        .IsUnique();
+
+                    b.ToTable("child_links", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Parents.OperatorImpersonationAudit", b =>
+                {
+                    b.Property<Guid>("OperatorImpersonationAuditId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("operator_impersonation_audit_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<Guid>("OperatorActorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operator_actor_id");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("Surface")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("surface");
+
+                    b.Property<Guid?>("TargetChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_child_id");
+
+                    b.Property<Guid>("TargetParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_parent_profile_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTime>("ViewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("viewed_at");
+
+                    b.HasKey("OperatorImpersonationAuditId");
+
+                    b.HasIndex("TenantId", "TargetParentProfileId", "ViewedAt");
+
+                    b.ToTable("operator_impersonation_audits", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Parents.ParentNotification", b =>
+                {
+                    b.Property<Guid>("ParentNotificationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_notification_id");
+
+                    b.Property<string>("BodyAr")
+                        .HasColumnType("text")
+                        .HasColumnName("body_ar");
+
+                    b.Property<string>("BodyEn")
+                        .HasColumnType("text")
+                        .HasColumnName("body_en");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("channel");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DeliveryState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("delivery_state");
+
+                    b.Property<DateTime?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatched_at");
+
+                    b.Property<string>("Language")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("language");
+
+                    b.Property<string>("NotificationKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("notification_kind");
+
+                    b.Property<Guid>("ParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_profile_id");
+
+                    b.Property<DateTime?>("QuietHoursDeferredUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("quiet_hours_deferred_until");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("ParentNotificationId");
+
+                    b.HasIndex("DeliveryState", "CreatedAt");
+
+                    b.ToTable("parent_notifications", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.Parents.ParentProfile", b =>
+                {
+                    b.Property<Guid>("ParentProfileId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_profile_id");
+
+                    b.Property<string>("ConsentState")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("consent_state");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("IdentityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("identity_id");
+
+                    b.Property<string>("Locale")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("locale");
+
+                    b.Property<string>("NotificationChannels")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("notification_channels");
+
+                    b.Property<string>("PerChildOverrides")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("per_child_overrides");
+
+                    b.Property<string>("PreferredLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("preferred_language");
+
+                    b.Property<string>("QuietHours")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("quiet_hours");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Timezone")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("timezone");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ParentProfileId");
+
+                    b.HasIndex("TenantId", "IdentityId")
+                        .IsUnique();
+
+                    b.ToTable("parent_profiles", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.PromptAudit.Entities.Prompt", b =>
+                {
+                    b.Property<Guid>("PromptId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("prompt_id");
+
+                    b.Property<Guid?>("ActiveVersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("active_version_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<bool>("PromotionBlockFlag")
+                        .HasColumnType("boolean")
+                        .HasColumnName("promotion_block_flag");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("purpose");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("PromptId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("prompts", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.PromptAudit.Entities.PromptAuditEntry", b =>
+                {
+                    b.Property<Guid>("EntryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("entry_id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("action");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("actor");
+
+                    b.Property<string>("CorrelationId")
+                        .HasColumnType("text")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("Diff")
+                        .HasColumnType("text")
+                        .HasColumnName("diff");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<Guid>("PromptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prompt_id");
+
+                    b.Property<Guid?>("VersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("version_id");
+
+                    b.HasKey("EntryId");
+
+                    b.HasIndex("PromptId");
+
+                    b.ToTable("prompt_audit_entries", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.PromptAudit.Entities.PromptVersion", b =>
+                {
+                    b.Property<Guid>("VersionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("version_id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("DeclaredVariables")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("declared_variables");
+
+                    b.Property<Guid>("PromptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prompt_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("version_number");
+
+                    b.HasKey("VersionId");
+
+                    b.HasIndex("PromptId", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("prompt_versions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.ProviderBindings.ProviderAdapterBinding", b =>
+                {
+                    b.Property<Guid>("BindingId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("binding_id");
+
+                    b.Property<bool>("Active")
+                        .HasColumnType("boolean")
+                        .HasColumnName("active");
+
+                    b.Property<string>("Capability")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("capability");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CurriculumScope")
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_scope");
+
+                    b.Property<string>("Environment")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("environment");
+
+                    b.Property<string>("FallbackChain")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("fallback_chain");
+
+                    b.Property<bool>("PromotionBlockFlag")
+                        .HasColumnType("boolean")
+                        .HasColumnName("promotion_block_flag");
+
+                    b.Property<string>("ProviderConfigurationRef")
+                        .HasColumnType("text")
+                        .HasColumnName("provider_configuration_ref");
+
+                    b.Property<string>("ProviderIdentifier")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("provider_identifier");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("BindingId");
+
+                    b.HasIndex("Capability", "Environment", "CurriculumScope")
+                        .IsUnique()
+                        .HasFilter("active = true");
+
+                    b.HasIndex("Capability", "Environment", "CurriculumScope", "Active")
+                        .HasDatabaseName("IX_provider_adapter_bindings_capability_environment_curriculu~1");
+
+                    b.ToTable("provider_adapter_bindings", (string)null);
+                });
+
             modelBuilder.Entity("Muallimi.Domain.Publication.PublishedAsset", b =>
                 {
                     b.Property<Guid>("PublishedId")
@@ -780,6 +2247,713 @@ namespace Muallimi.Infrastructure.Migrations
                     b.HasKey("DecisionId");
 
                     b.ToTable("review_decisions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.HomeworkHelpSubmission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AiRequestRecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ai_request_record_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ExtractedProblemText")
+                        .HasColumnType("text")
+                        .HasColumnName("extracted_problem_text");
+
+                    b.Property<string>("FinalOutcome")
+                        .HasColumnType("text")
+                        .HasColumnName("final_outcome");
+
+                    b.Property<string>("ImageBlobReference")
+                        .HasColumnType("text")
+                        .HasColumnName("image_blob_reference");
+
+                    b.Property<string>("ImagePreprocessMetadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("image_preprocess_metadata");
+
+                    b.Property<string>("InputModality")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("input_modality");
+
+                    b.Property<Guid?>("OcrAdapterBindingId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ocr_adapter_binding_id");
+
+                    b.Property<DateTime>("RetentionUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retention_until");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TextPayload")
+                        .HasColumnType("text")
+                        .HasColumnName("text_payload");
+
+                    b.Property<Guid?>("VoiceCaptureId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("voice_capture_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId");
+
+                    b.ToTable("homework_help_submissions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.LessonViewerState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("CaptionsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("captions_enabled");
+
+                    b.Property<DateTime>("LastInteractionAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_interaction_at");
+
+                    b.Property<Guid>("LessonId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lesson_id");
+
+                    b.Property<string>("PlaybackState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("playback_state");
+
+                    b.Property<double>("Rate")
+                        .HasColumnType("double precision")
+                        .HasColumnName("rate");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<string>("TeacherVoiceProfileId")
+                        .HasColumnType("text")
+                        .HasColumnName("teacher_voice_profile_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("ViewerPosition")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("viewer_position");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "StudentSessionId");
+
+                    b.ToTable("lesson_viewer_states", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.MockTestSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<double?>("FinalScore")
+                        .HasColumnType("double precision")
+                        .HasColumnName("final_score");
+
+                    b.Property<string>("PlanTierSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plan_tier_snapshot");
+
+                    b.Property<string>("Progress")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("progress");
+
+                    b.Property<string>("QuestionBankSnapshot")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("question_bank_snapshot");
+
+                    b.Property<DateTime>("ServerDeadlineAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("server_deadline_at");
+
+                    b.Property<DateTime>("ServerStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("server_started_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<int>("TimeLimitSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("time_limit_seconds");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId");
+
+                    b.ToTable("mock_test_sessions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.PlanGatePolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("EnabledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("enabled_at");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("GradeScope")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("grade_scope");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("PolicySource")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("policy_source");
+
+                    b.Property<string>("RequiredPlanTiers")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("required_plan_tiers");
+
+                    b.Property<string>("SubjectScope")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("subject_scope");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Mode", "TenantId", "EnabledAt");
+
+                    b.ToTable("plan_gate_policies", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.QuizSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ChapterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("chapter_id");
+
+                    b.Property<DateTime?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<string>("Progress")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("progress");
+
+                    b.Property<string>("QuestionBankSnapshot")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("question_bank_snapshot");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid?>("TopicId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId");
+
+                    b.ToTable("quiz_sessions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.SessionEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CurriculumScope")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("curriculum_scope");
+
+                    b.Property<int>("DispatchAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("dispatch_attempts");
+
+                    b.Property<string>("DispatchState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("dispatch_state");
+
+                    b.Property<DateTime?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatched_at");
+
+                    b.Property<string>("EventKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_kind");
+
+                    b.Property<string>("EventPayload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("event_payload");
+
+                    b.Property<string>("PlanTierSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plan_tier_snapshot");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("DispatchState", "CreatedAt");
+
+                    b.ToTable("session_events", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.StudentProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AvatarReference")
+                        .HasColumnType("text")
+                        .HasColumnName("avatar_reference");
+
+                    b.Property<string>("ConsentState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("consent_state");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CurriculumType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("curriculum_type");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("Grade")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grade");
+
+                    b.Property<string>("PlanTier")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plan_tier");
+
+                    b.Property<string>("PreferredLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("preferred_language");
+
+                    b.Property<bool?>("RtlOverride")
+                        .HasColumnType("boolean")
+                        .HasColumnName("rtl_override");
+
+                    b.Property<string>("SubjectsEnrolled")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("subjects_enrolled");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("student_profiles", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.StudentSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ActiveChapterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("active_chapter_id");
+
+                    b.Property<string>("ActiveCurriculumType")
+                        .HasColumnType("text")
+                        .HasColumnName("active_curriculum_type");
+
+                    b.Property<string>("ActiveGrade")
+                        .HasColumnType("text")
+                        .HasColumnName("active_grade");
+
+                    b.Property<Guid?>("ActiveLessonId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("active_lesson_id");
+
+                    b.Property<string>("ActiveMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("active_mode");
+
+                    b.Property<Guid?>("ActiveSubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("active_subject_id");
+
+                    b.Property<Guid?>("ActiveTopicId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("active_topic_id");
+
+                    b.Property<Guid>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("DeviceClass")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("device_class");
+
+                    b.Property<string>("EndReason")
+                        .HasColumnType("text")
+                        .HasColumnName("end_reason");
+
+                    b.Property<string>("PlanTierSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plan_tier_snapshot");
+
+                    b.Property<DateTime?>("SessionEndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("session_ended_at");
+
+                    b.Property<DateTime>("SessionLastActivityAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("session_last_activity_at");
+
+                    b.Property<DateTime>("SessionStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("session_started_at");
+
+                    b.Property<Guid>("StudentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_profile_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TutorLanguage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tutor_language");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("TenantId", "StudentProfileId");
+
+                    b.ToTable("student_sessions", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.TutorChatMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AiRequestRecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ai_request_record_id");
+
+                    b.Property<string>("ConfidenceSignal")
+                        .HasColumnType("text")
+                        .HasColumnName("confidence_signal");
+
+                    b.Property<string>("ContentText")
+                        .HasColumnType("text")
+                        .HasColumnName("content_text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EvidenceRefs")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("evidence_refs");
+
+                    b.Property<string>("FinalOutcome")
+                        .HasColumnType("text")
+                        .HasColumnName("final_outcome");
+
+                    b.Property<string>("GuardrailFinalStage")
+                        .HasColumnType("text")
+                        .HasColumnName("guardrail_final_stage");
+
+                    b.Property<string>("Language")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("language");
+
+                    b.Property<string>("Modality")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("modality");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("role");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<int>("TurnNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("turn_number");
+
+                    b.Property<string>("VoiceCaptureReference")
+                        .HasColumnType("text")
+                        .HasColumnName("voice_capture_reference");
+
+                    b.Property<string>("VoicePlaybackReference")
+                        .HasColumnType("text")
+                        .HasColumnName("voice_playback_reference");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId", "TurnNumber")
+                        .IsUnique();
+
+                    b.ToTable("tutor_chat_messages", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.VoiceCapture", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BlobReference")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("blob_reference");
+
+                    b.Property<string>("Codec")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("codec");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_ms");
+
+                    b.Property<DateTime>("RetentionUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retention_until");
+
+                    b.Property<Guid?>("SttAdapterBindingId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stt_adapter_binding_id");
+
+                    b.Property<string>("SttState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("stt_state");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TranscriptText")
+                        .HasColumnType("text")
+                        .HasColumnName("transcript_text");
+
+                    b.Property<Guid?>("TutorChatMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tutor_chat_message_id");
+
+                    b.Property<string>("UploadState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("upload_state");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId");
+
+                    b.ToTable("voice_captures", (string)null);
+                });
+
+            modelBuilder.Entity("Muallimi.Domain.StudentExperience.WhiteboardSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("EndReason")
+                        .HasColumnType("text")
+                        .HasColumnName("end_reason");
+
+                    b.Property<DateTime?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<string>("PlanTierSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plan_tier_snapshot");
+
+                    b.Property<string>("SessionMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("session_mode");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("StepLog")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("step_log");
+
+                    b.Property<Guid>("StudentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("student_session_id");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid?>("TopicId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentSessionId");
+
+                    b.ToTable("whiteboard_sessions", (string)null);
                 });
 
             modelBuilder.Entity("Muallimi.Domain.Curriculum.ContentChunk", b =>

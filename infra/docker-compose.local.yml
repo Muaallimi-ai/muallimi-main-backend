@@ -1,20 +1,22 @@
-# Muallimi Local Development Infrastructure
-# Phase 0: Foundation and Local Parity
+# Muaallimi Local Development Infrastructure — unified stack.
 #
-# This provides local alternatives for all managed cloud dependencies.
-# No Azure or Cloudflare credentials are required.
+# One compose file. Bring it up with:
+#   docker compose -f infra/docker-compose.local.yml up -d
 #
-# Usage: docker compose -f infra/docker-compose.local.yml up -d
+# Contains every local-parity service the platform needs across all phases
+# (0-4). LLM completions + embeddings are served by managed APIs (Claude +
+# OpenAI) from the ai-service process — no local LLM container.
 #
-# Production Equivalent Mapping:
+# Production equivalents:
 #   PostgreSQL + pgvector  -> Azure Database for PostgreSQL Flexible Server
 #   MinIO                  -> Azure Blob Storage
 #   RabbitMQ               -> Azure Service Bus
 #   Redis                  -> Azure Cache for Redis
 #   Seq                    -> Azure Application Insights + Log Analytics
+#   Notification stubs     -> provider behind NotificationChannelAdapter
 
 services:
-  # ─── Database + Vector Search ───────────────────────────────────────
+  # ─── Database + vector search ───────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
     container_name: muallimi-postgres
@@ -33,7 +35,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Blob Storage (Azure Blob equivalent) ───────────────────────────
+  # ─── Blob storage (Azure Blob equivalent) ───────────────────────────
   minio:
     image: minio/minio:latest
     container_name: muallimi-minio
@@ -52,7 +54,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Message Queue (Azure Service Bus equivalent) ───────────────────
+  # ─── Message queue (Azure Service Bus equivalent) ───────────────────
   rabbitmq:
     image: rabbitmq:3-management
     container_name: muallimi-rabbitmq
@@ -84,44 +86,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Phase 2: Local LLM Lightweight Tier ────────────────────────────
-  # Local LLM container providing the lightweight (fast, cheap) tier behind
-  # the ILlmAdapter (llm_lightweight binding). No managed cloud credentials.
-  ollama-lightweight:
-    image: ollama/ollama:latest
-    container_name: muallimi-ollama-lightweight
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-lightweight-data:/root/.ollama
-    environment:
-      OLLAMA_MODELS: /root/.ollama/models
-    healthcheck:
-      test: ["CMD", "sh", "-c", "curl -fsS http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ─── Phase 2: Local LLM Stronger Tier ───────────────────────────────
-  # Local LLM container providing the stronger (higher-quality) tier behind
-  # the ILlmAdapter (llm_stronger binding). No managed cloud credentials.
-  ollama-stronger:
-    image: ollama/ollama:latest
-    container_name: muallimi-ollama-stronger
-    ports:
-      - "11435:11434"
-    volumes:
-      - ollama-stronger-data:/root/.ollama
-    environment:
-      OLLAMA_MODELS: /root/.ollama/models
-    healthcheck:
-      test: ["CMD", "sh", "-c", "curl -fsS http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ─── Phase 2: Local Speech-to-Text ──────────────────────────────────
-  # Whisper-compatible local STT service behind ISttAdapter.
+  # ─── Speech-to-text (Whisper) ───────────────────────────────────────
   stt:
     image: onerahmet/openai-whisper-asr-webservice:latest
     container_name: muallimi-stt
@@ -136,9 +101,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Phase 2: Local Text-to-Speech (AI tutor voice profile) ─────────
-  # Local TTS service behind ITtsAdapter. The AI tutor voice profile
-  # identifier MUST be distinct from every Phase 1 teacher voice profile.
+  # ─── Text-to-speech (AI tutor voice profile) ────────────────────────
+  # The AI tutor voice profile identifier MUST be distinct from every
+  # Phase 1 teacher voice profile (enforced by LocalVoiceProfileAdapter).
   tts:
     image: synesthesiam/mozillatts:latest
     container_name: muallimi-tts
@@ -165,20 +130,144 @@ services:
     volumes:
       - seq-data:/data
 
+  # ─── One-shot bootstrap: MinIO buckets ──────────────────────────────
+  # Creates every bucket the platform writes to, across every phase:
+  #   muallimi-ai-tutor-local                  (Phase 2 — red-team scenarios)
+  #   muallimi-homework-images-local           (Phase 3 — homework uploads)
+  #   muallimi-voice-captures-local            (Phase 3 — voice captures)
+  #   muallimi-weekly-reports-local            (Phase 4 — weekly report artefacts)
+  #   muallimi-operator-audit-exports-local    (Phase 4 — audit exports)
+  # Idempotent — safe to re-run.
+  minio-bootstrap:
+    image: minio/mc:latest
+    container_name: muallimi-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 muallimi muallimi_local &&
+      mc mb --ignore-existing local/muallimi-ai-tutor-local &&
+      mc mb --ignore-existing local/muallimi-homework-images-local &&
+      mc mb --ignore-existing local/muallimi-voice-captures-local &&
+      mc mb --ignore-existing local/muallimi-weekly-reports-local &&
+      mc mb --ignore-existing local/muallimi-operator-audit-exports-local &&
+      mc version enable local/muallimi-homework-images-local &&
+      mc version enable local/muallimi-voice-captures-local &&
+      mc version enable local/muallimi-weekly-reports-local &&
+      mc version enable local/muallimi-operator-audit-exports-local &&
+      echo 'All MinIO buckets ready'
+      "
+    restart: "no"
+
+  # ─── One-shot bootstrap: RabbitMQ exchanges + queues ────────────────
+  # Declares the topic-exchange topology for every phase:
+  #   Phase 2:
+  #     ai.tutor.request.recorded              (exchange, topic)
+  #     ai.tutor.redteam.run.completed         (exchange, topic)
+  #   Phase 3:
+  #     student.session.events                 (exchange, topic)
+  #     student.session.events.phase4          (queue, bound routing_key=#)
+  #   Phase 4:
+  #     phase3.session.events                  (exchange, topic — ingestion feed)
+  #     phase3.session.events.phase4           (queue, bound routing_key=#)
+  #     phase4.downstream.events               (exchange, topic — phase-5 feed)
+  #     phase4.downstream.events.phase5        (queue, bound routing_key=#)
+  # Idempotent — safe to re-run.
+  rabbitmq-bootstrap:
+    image: rabbitmq:3-management
+    container_name: muallimi-rabbitmq-bootstrap
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local list exchanges >/dev/null 2>&1; do sleep 2; done &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare exchange name=ai.tutor.request.recorded type=topic durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare exchange name=ai.tutor.redteam.run.completed type=topic durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare exchange name=student.session.events type=topic durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare queue name=student.session.events.phase4 durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare binding source=student.session.events destination=student.session.events.phase4 routing_key=# &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare exchange name=phase3.session.events type=topic durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare queue name=phase3.session.events.phase4 durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare binding source=phase3.session.events destination=phase3.session.events.phase4 routing_key=# &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare exchange name=phase4.downstream.events type=topic durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare queue name=phase4.downstream.events.phase5 durable=true &&
+      rabbitmqadmin -H rabbitmq -u muallimi -p muallimi_local declare binding source=phase4.downstream.events destination=phase4.downstream.events.phase5 routing_key=# &&
+      echo 'All RabbitMQ topology ready'
+      "
+    restart: "no"
+
+  # ─── Notification stubs (Phase 4 NotificationChannelAdapter) ────────
+  # Each stub prints to stdout and writes a delivery receipt to a shared
+  # volume so tests can assert on-disk evidence.
+  notification-stub-in-app:
+    image: python:3.12-slim
+    container_name: muallimi-notification-stub-in-app
+    volumes:
+      - ./notification-stubs/in_app_stub:/app:ro
+      - notification-stub-receipts:/receipts
+    working_dir: /app
+    command: ["python", "server.py"]
+    ports:
+      - "9401:9401"
+    restart: unless-stopped
+
+  notification-stub-email:
+    image: python:3.12-slim
+    container_name: muallimi-notification-stub-email
+    volumes:
+      - ./notification-stubs/email_stub:/app:ro
+      - notification-stub-receipts:/receipts
+    working_dir: /app
+    command: ["python", "server.py"]
+    ports:
+      - "9402:9402"
+    restart: unless-stopped
+
+  notification-stub-push:
+    image: python:3.12-slim
+    container_name: muallimi-notification-stub-push
+    volumes:
+      - ./notification-stubs/push_stub:/app:ro
+      - notification-stub-receipts:/receipts
+    working_dir: /app
+    command: ["python", "server.py"]
+    ports:
+      - "9403:9403"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   minio-data:
   rabbitmq-data:
   redis-data:
   seq-data:
-  ollama-lightweight-data:
-  ollama-stronger-data:
+  notification-stub-receipts:
 
-# ─── Phase 2: Local bucket / topics / cache namespace reservations ────
-# Bucket `muallimi-ai-tutor-local` (MinIO) — red-team scenario sets and
-#   evaluation artefacts. Provisioned by infra/Phase2/Bootstrap.sh.
-# Queue/broker topics (RabbitMQ) —
-#   `ai.tutor.request.recorded` (ai-service -> main-backend persistence),
-#   `ai.tutor.redteam.run.completed` (ai-service -> main-backend persistence).
-# Cache namespace (Redis) — `ai-tutor:*` (prompt registry hot path,
-#   routing config cache, guardrail rate limiting).
+# ─── Reserved namespaces (documentation) ──────────────────────────────
+# MinIO buckets:
+#   muallimi-ai-tutor-local                  Phase 2 red-team scenarios
+#   muallimi-homework-images-local           Phase 3 homework uploads
+#   muallimi-voice-captures-local            Phase 3 voice captures
+#   muallimi-weekly-reports-local            Phase 4 weekly reports
+#   muallimi-operator-audit-exports-local    Phase 4 audit exports
+#
+# RabbitMQ topology:
+#   ai.tutor.request.recorded                Phase 2 exchange
+#   ai.tutor.redteam.run.completed           Phase 2 exchange
+#   student.session.events (→ ...phase4)     Phase 3 exchange+queue
+#   phase3.session.events (→ ...phase4)      Phase 4 ingestion
+#   phase4.downstream.events (→ ...phase5)   Phase 4 emission
+#
+# Redis namespaces:
+#   ai-tutor:*            prompt registry + routing config + guardrail rate limits
+#   student:session:*     Phase 3 session scope cache
+#   student:plan-gate:*   Phase 3 plan gate policy cache
+#   phase4:dashboard:*    Phase 4 parent dashboard query cache
+#   phase4:preference:*   Phase 4 parent preference cache
+#
+# Notification stubs (HTTP):
+#   in_app  : http://localhost:9401/dispatch
+#   email   : http://localhost:9402/dispatch
+#   push    : http://localhost:9403/dispatch

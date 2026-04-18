@@ -31,7 +31,7 @@ public class RegressionPromotionBlockTests
             capability: Capabilities.LlmLightweight,
             environment: Environments.Local,
             curriculumScope: null,
-            providerIdentifier: "local-ollama");
+            providerIdentifier: "anthropic-lightweight");
 
         var envelope = BuildEnvelope(prompt, binding, promotionBlock: true,
             regressions: new[] { "pi-002-en" });
@@ -68,7 +68,7 @@ public class RegressionPromotionBlockTests
             capability: Capabilities.LlmLightweight,
             environment: Environments.Local,
             curriculumScope: null,
-            providerIdentifier: "local-ollama");
+            providerIdentifier: "anthropic-lightweight");
 
         var regressing = BuildEnvelope(prompt, binding, promotionBlock: true,
             regressions: new[] { "pi-002-en" });

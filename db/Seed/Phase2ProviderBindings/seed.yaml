@@ -8,25 +8,22 @@ environment: local
 bindings:
   - capability: llm_lightweight
     active: true
-    provider_identifier: local-ollama-lightweight
+    provider_identifier: anthropic-lightweight
     fallback_chain:
-      - local-ollama-stronger
-      - stub-llm
+      - anthropic-stronger
     curriculum_scope: null
 
   - capability: llm_stronger
     active: true
-    provider_identifier: local-ollama-stronger
+    provider_identifier: anthropic-stronger
     fallback_chain:
-      - local-ollama-lightweight
-      - stub-llm
+      - anthropic-lightweight
     curriculum_scope: null
 
   - capability: embedding
     active: true
-    provider_identifier: phase1-embedding
-    fallback_chain:
-      - stub-embedding
+    provider_identifier: openai
+    fallback_chain: []
     curriculum_scope: null
 
   - capability: stt
