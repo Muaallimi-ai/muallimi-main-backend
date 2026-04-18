@@ -11,6 +11,7 @@ using Muallimi.Domain.Publication;
 using Muallimi.Domain.Review;
 using Muallimi.Domain.Engagement;
 using Muallimi.Domain.Parents;
+using Muallimi.Domain.SaasOperations;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Domain.Shared;
 using Muallimi.Domain.StudentExperience;
@@ -133,6 +134,26 @@ public class MuallimiDbContext : DbContext
     public DbSet<SchoolLicense> SchoolLicenses => Set<SchoolLicense>();
     public DbSet<SchoolAggregateView> SchoolAggregateViews => Set<SchoolAggregateView>();
     public DbSet<Phase5DownstreamEvent> Phase5DownstreamEvents => Set<Phase5DownstreamEvent>();
+
+    // ── Phase 6: SaaS Operations, Billing, Security, and Launch Readiness ──
+    public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
+    public DbSet<Subscription> Subscriptions => Set<Subscription>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
+    public DbSet<NotificationProviderBinding> NotificationProviderBindings => Set<NotificationProviderBinding>();
+    public DbSet<NotificationDeliveryReceipt> NotificationDeliveryReceipts => Set<NotificationDeliveryReceipt>();
+    public DbSet<AIOperationsMetric> Phase6AIOperationsMetrics => Set<AIOperationsMetric>();
+    public DbSet<AIOperationsAggregate> AIOperationsAggregates => Set<AIOperationsAggregate>();
+    public DbSet<AlertRule> AlertRules => Set<AlertRule>();
+    public DbSet<AlertEvent> AlertEvents => Set<AlertEvent>();
+    public DbSet<IncidentRecord> IncidentRecords => Set<IncidentRecord>();
+    public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
+    public DbSet<DataDeletionRequest> DataDeletionRequests => Set<DataDeletionRequest>();
+    public DbSet<DataRetentionPolicy> DataRetentionPolicies => Set<DataRetentionPolicy>();
+    public DbSet<FeatureFlag> FeatureFlags => Set<FeatureFlag>();
+    public DbSet<LaunchReadinessGate> LaunchReadinessGates => Set<LaunchReadinessGate>();
+    public DbSet<TenantHealthView> TenantHealthViews => Set<TenantHealthView>();
+    public DbSet<Phase6OperationalEvent> Phase6OperationalEvents => Set<Phase6OperationalEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -575,6 +596,9 @@ public class MuallimiDbContext : DbContext
 
         ConfigurePhase5(modelBuilder);
         ApplyPhase5TenantFilters(modelBuilder);
+
+        ConfigurePhase6(modelBuilder);
+        ApplyPhase6TenantFilters(modelBuilder);
     }
 
     private static void ConfigurePhase3(ModelBuilder modelBuilder)
@@ -1490,6 +1514,388 @@ public class MuallimiDbContext : DbContext
             e.HasIndex(x => new { x.DeliveryState, x.OccurredAt });
             e.HasIndex(x => x.CorrelationId);
         });
+    }
+
+    private static void ConfigurePhase6(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SubscriptionPlan>(e =>
+        {
+            e.ToTable("subscription_plans");
+            e.HasKey(x => x.PlanId);
+            e.Property(x => x.PlanId).HasColumnName("plan_id");
+            e.Property(x => x.PlanNameAr).HasColumnName("plan_name_ar");
+            e.Property(x => x.PlanNameEn).HasColumnName("plan_name_en");
+            e.Property(x => x.PlanType).HasColumnName("plan_type");
+            e.Property(x => x.Tier).HasColumnName("tier");
+            e.Property(x => x.PriceEgp).HasColumnName("price_egp").HasColumnType("decimal(10,2)");
+            e.Property(x => x.PriceUsd).HasColumnName("price_usd").HasColumnType("decimal(10,2)");
+            e.Property(x => x.BillingCycle).HasColumnName("billing_cycle");
+            e.Property(x => x.SeatLimit).HasColumnName("seat_limit");
+            e.Property(x => x.FeatureEntitlements).HasColumnName("feature_entitlements").HasColumnType("jsonb");
+            e.Property(x => x.UsageLimits).HasColumnName("usage_limits").HasColumnType("jsonb");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedByOperatorId).HasColumnName("created_by_operator_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.PlanType, x.Tier, x.BillingCycle }).IsUnique();
+        });
+
+        modelBuilder.Entity<Subscription>(e =>
+        {
+            e.ToTable("subscriptions");
+            e.HasKey(x => x.SubscriptionId);
+            e.Property(x => x.SubscriptionId).HasColumnName("subscription_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.PlanId).HasColumnName("plan_id");
+            e.Property(x => x.PlanType).HasColumnName("plan_type");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.CurrentPeriodStart).HasColumnName("current_period_start");
+            e.Property(x => x.CurrentPeriodEnd).HasColumnName("current_period_end");
+            e.Property(x => x.TrialEnd).HasColumnName("trial_end");
+            e.Property(x => x.GracePeriodEnd).HasColumnName("grace_period_end");
+            e.Property(x => x.PaymentMethodRef).HasColumnName("payment_method_ref")
+                .HasConversion(new EncryptedStringConverter());
+            e.Property(x => x.CancelledAt).HasColumnName("cancelled_at");
+            e.Property(x => x.CancellationReason).HasColumnName("cancellation_reason");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.TenantId).IsUnique();
+        });
+
+        modelBuilder.Entity<Invoice>(e =>
+        {
+            e.ToTable("invoices");
+            e.HasKey(x => x.InvoiceId);
+            e.Property(x => x.InvoiceId).HasColumnName("invoice_id");
+            e.Property(x => x.SubscriptionId).HasColumnName("subscription_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.InvoiceNumber).HasColumnName("invoice_number");
+            e.Property(x => x.PeriodStart).HasColumnName("period_start");
+            e.Property(x => x.PeriodEnd).HasColumnName("period_end");
+            e.Property(x => x.LineItems).HasColumnName("line_items").HasColumnType("jsonb");
+            e.Property(x => x.Subtotal).HasColumnName("subtotal").HasColumnType("decimal(10,2)");
+            e.Property(x => x.TaxAmount).HasColumnName("tax_amount").HasColumnType("decimal(10,2)");
+            e.Property(x => x.Total).HasColumnName("total").HasColumnType("decimal(10,2)");
+            e.Property(x => x.Currency).HasColumnName("currency");
+            e.Property(x => x.PaymentStatus).HasColumnName("payment_status");
+            e.Property(x => x.PdfBlobKey).HasColumnName("pdf_blob_key");
+            e.Property(x => x.IssuedAt).HasColumnName("issued_at");
+            e.Property(x => x.PaidAt).HasColumnName("paid_at");
+            e.HasIndex(x => x.InvoiceNumber).IsUnique();
+        });
+
+        modelBuilder.Entity<PaymentTransaction>(e =>
+        {
+            e.ToTable("payment_transactions");
+            e.HasKey(x => x.TransactionId);
+            e.Property(x => x.TransactionId).HasColumnName("transaction_id");
+            e.Property(x => x.InvoiceId).HasColumnName("invoice_id");
+            e.Property(x => x.SubscriptionId).HasColumnName("subscription_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ProviderName).HasColumnName("provider_name");
+            e.Property(x => x.ProviderReference).HasColumnName("provider_reference");
+            e.Property(x => x.Amount).HasColumnName("amount").HasColumnType("decimal(10,2)");
+            e.Property(x => x.Currency).HasColumnName("currency");
+            e.Property(x => x.TransactionType).HasColumnName("transaction_type");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.FailureReason).HasColumnName("failure_reason");
+            e.Property(x => x.FailureCode).HasColumnName("failure_code");
+            e.Property(x => x.WebhookPayload).HasColumnName("webhook_payload").HasColumnType("jsonb")
+                .HasConversion(new EncryptedJsonConverter());
+            e.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.AttemptedAt).HasColumnName("attempted_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.HasIndex(x => new { x.ProviderReference, x.TransactionType }).IsUnique()
+                .HasFilter("provider_reference IS NOT NULL");
+            e.HasIndex(x => x.IdempotencyKey);
+        });
+
+        modelBuilder.Entity<NotificationProviderBinding>(e =>
+        {
+            e.ToTable("notification_provider_bindings");
+            e.HasKey(x => x.BindingId);
+            e.Property(x => x.BindingId).HasColumnName("binding_id");
+            e.Property(x => x.Channel).HasColumnName("channel");
+            e.Property(x => x.ProviderName).HasColumnName("provider_name");
+            e.Property(x => x.Environment).HasColumnName("environment");
+            e.Property(x => x.Configuration).HasColumnName("configuration").HasColumnType("jsonb")
+                .HasConversion(new EncryptedJsonConverterNonNull());
+            e.Property(x => x.RateLimitPerMinute).HasColumnName("rate_limit_per_minute");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.Channel, x.Environment }).IsUnique();
+        });
+
+        modelBuilder.Entity<NotificationDeliveryReceipt>(e =>
+        {
+            e.ToTable("notification_delivery_receipts");
+            e.HasKey(x => x.ReceiptId);
+            e.Property(x => x.ReceiptId).HasColumnName("receipt_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.NotificationId).HasColumnName("notification_id");
+            e.Property(x => x.RecipientId).HasColumnName("recipient_id");
+            e.Property(x => x.Channel).HasColumnName("channel");
+            e.Property(x => x.ProviderName).HasColumnName("provider_name");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.ProviderMessageId).HasColumnName("provider_message_id");
+            e.Property(x => x.FailureReason).HasColumnName("failure_reason");
+            e.Property(x => x.RetryCount).HasColumnName("retry_count");
+            e.Property(x => x.NextRetryAt).HasColumnName("next_retry_at");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
+            e.Property(x => x.DeliveredAt).HasColumnName("delivered_at");
+            e.HasIndex(x => new { x.NotificationId, x.RecipientId, x.Channel });
+            e.HasIndex(x => x.CorrelationId);
+        });
+
+        modelBuilder.Entity<AIOperationsMetric>(e =>
+        {
+            e.ToTable("phase6_ai_operations_metrics");
+            e.HasKey(x => x.MetricId);
+            e.Property(x => x.MetricId).HasColumnName("metric_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.Phase).HasColumnName("phase");
+            e.Property(x => x.PromptKey).HasColumnName("prompt_key");
+            e.Property(x => x.PromptVersion).HasColumnName("prompt_version");
+            e.Property(x => x.ProviderName).HasColumnName("provider_name");
+            e.Property(x => x.RequestCount).HasColumnName("request_count");
+            e.Property(x => x.TotalInputTokens).HasColumnName("total_input_tokens");
+            e.Property(x => x.TotalOutputTokens).HasColumnName("total_output_tokens");
+            e.Property(x => x.EstimatedCostEgp).HasColumnName("estimated_cost_egp").HasColumnType("decimal(10,4)");
+            e.Property(x => x.LatencyMs).HasColumnName("latency_ms");
+            e.Property(x => x.GuardrailOutcome).HasColumnName("guardrail_outcome");
+            e.Property(x => x.ConfidenceScore).HasColumnName("confidence_score").HasColumnType("decimal(3,2)");
+            e.Property(x => x.WasRefusal).HasColumnName("was_refusal");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.HasIndex(x => new { x.TenantId, x.OccurredAt });
+            e.HasIndex(x => new { x.Phase, x.OccurredAt });
+            e.HasIndex(x => new { x.PromptKey, x.OccurredAt });
+            e.HasIndex(x => new { x.GuardrailOutcome, x.OccurredAt });
+        });
+
+        modelBuilder.Entity<AIOperationsAggregate>(e =>
+        {
+            e.ToTable("ai_operations_aggregates");
+            e.HasKey(x => x.AggregateId);
+            e.Property(x => x.AggregateId).HasColumnName("aggregate_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.Phase).HasColumnName("phase");
+            e.Property(x => x.PromptKey).HasColumnName("prompt_key");
+            e.Property(x => x.PeriodType).HasColumnName("period_type");
+            e.Property(x => x.PeriodStart).HasColumnName("period_start");
+            e.Property(x => x.RequestCount).HasColumnName("request_count");
+            e.Property(x => x.TotalInputTokens).HasColumnName("total_input_tokens");
+            e.Property(x => x.TotalOutputTokens).HasColumnName("total_output_tokens");
+            e.Property(x => x.TotalCostEgp).HasColumnName("total_cost_egp").HasColumnType("decimal(12,4)");
+            e.Property(x => x.AvgLatencyMs).HasColumnName("avg_latency_ms");
+            e.Property(x => x.P95LatencyMs).HasColumnName("p95_latency_ms");
+            e.Property(x => x.P99LatencyMs).HasColumnName("p99_latency_ms");
+            e.Property(x => x.GuardrailPassCount).HasColumnName("guardrail_pass_count");
+            e.Property(x => x.GuardrailWarnCount).HasColumnName("guardrail_warn_count");
+            e.Property(x => x.GuardrailBlockCount).HasColumnName("guardrail_block_count");
+            e.Property(x => x.RefusalCount).HasColumnName("refusal_count");
+            e.Property(x => x.ComputedAt).HasColumnName("computed_at");
+            e.HasIndex(x => new { x.TenantId, x.Phase, x.PromptKey, x.PeriodType, x.PeriodStart }).IsUnique();
+        });
+
+        modelBuilder.Entity<AlertRule>(e =>
+        {
+            e.ToTable("alert_rules");
+            e.HasKey(x => x.RuleId);
+            e.Property(x => x.RuleId).HasColumnName("rule_id");
+            e.Property(x => x.RuleName).HasColumnName("rule_name");
+            e.Property(x => x.MetricType).HasColumnName("metric_type");
+            e.Property(x => x.ThresholdValue).HasColumnName("threshold_value").HasColumnType("decimal(12,4)");
+            e.Property(x => x.ThresholdDirection).HasColumnName("threshold_direction");
+            e.Property(x => x.EvaluationWindowMin).HasColumnName("evaluation_window_min");
+            e.Property(x => x.CooldownMin).HasColumnName("cooldown_min");
+            e.Property(x => x.TenantScope).HasColumnName("tenant_scope");
+            e.Property(x => x.NotificationTargets).HasColumnName("notification_targets").HasColumnType("jsonb");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedByOperatorId).HasColumnName("created_by_operator_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<AlertEvent>(e =>
+        {
+            e.ToTable("alert_events");
+            e.HasKey(x => x.AlertEventId);
+            e.Property(x => x.AlertEventId).HasColumnName("alert_event_id");
+            e.Property(x => x.RuleId).HasColumnName("rule_id");
+            e.Property(x => x.TriggeringValue).HasColumnName("triggering_value").HasColumnType("decimal(12,4)");
+            e.Property(x => x.ThresholdValue).HasColumnName("threshold_value").HasColumnType("decimal(12,4)");
+            e.Property(x => x.AffectedTenants).HasColumnName("affected_tenants").HasColumnType("jsonb");
+            e.Property(x => x.SampleCorrelationIds).HasColumnName("sample_correlation_ids").HasColumnType("jsonb");
+            e.Property(x => x.ResolutionStatus).HasColumnName("resolution_status");
+            e.Property(x => x.ResolvedBy).HasColumnName("resolved_by");
+            e.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
+            e.Property(x => x.ResolutionNotes).HasColumnName("resolution_notes");
+            e.Property(x => x.FiredAt).HasColumnName("fired_at");
+            e.HasIndex(x => new { x.RuleId, x.FiredAt });
+        });
+
+        modelBuilder.Entity<IncidentRecord>(e =>
+        {
+            e.ToTable("incident_records");
+            e.HasKey(x => x.IncidentId);
+            e.Property(x => x.IncidentId).HasColumnName("incident_id");
+            e.Property(x => x.Severity).HasColumnName("severity");
+            e.Property(x => x.Title).HasColumnName("title");
+            e.Property(x => x.Description).HasColumnName("description");
+            e.Property(x => x.AffectedServices).HasColumnName("affected_services").HasColumnType("jsonb");
+            e.Property(x => x.AffectedTenants).HasColumnName("affected_tenants").HasColumnType("jsonb");
+            e.Property(x => x.RootCause).HasColumnName("root_cause");
+            e.Property(x => x.Resolution).HasColumnName("resolution");
+            e.Property(x => x.RunbookReference).HasColumnName("runbook_reference");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.OpenedBy).HasColumnName("opened_by");
+            e.Property(x => x.OpenedAt).HasColumnName("opened_at");
+            e.Property(x => x.MitigatedAt).HasColumnName("mitigated_at");
+            e.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
+            e.Property(x => x.Timeline).HasColumnName("timeline").HasColumnType("jsonb");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            // T079 — indexes for list filters (status/severity) and correlation lookup
+            e.HasIndex(x => new { x.Status, x.OpenedAt });
+            e.HasIndex(x => new { x.Severity, x.OpenedAt });
+            e.HasIndex(x => x.CorrelationId);
+        });
+
+        modelBuilder.Entity<AuditEntry>(e =>
+        {
+            e.ToTable("audit_entries");
+            e.HasKey(x => x.AuditEntryId);
+            e.Property(x => x.AuditEntryId).HasColumnName("audit_entry_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ActorId).HasColumnName("actor_id");
+            e.Property(x => x.ActorType).HasColumnName("actor_type");
+            e.Property(x => x.TargetId).HasColumnName("target_id");
+            e.Property(x => x.TargetType).HasColumnName("target_type");
+            e.Property(x => x.ActionType).HasColumnName("action_type");
+            e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb");
+            e.Property(x => x.IpAddress).HasColumnName("ip_address");
+            e.Property(x => x.UserAgent).HasColumnName("user_agent");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.HasIndex(x => new { x.TenantId, x.OccurredAt });
+            e.HasIndex(x => new { x.ActorId, x.OccurredAt });
+            e.HasIndex(x => new { x.TargetId, x.OccurredAt });
+            e.HasIndex(x => new { x.ActionType, x.OccurredAt });
+            e.HasIndex(x => x.CorrelationId);
+        });
+
+        modelBuilder.Entity<DataDeletionRequest>(e =>
+        {
+            e.ToTable("data_deletion_requests");
+            e.HasKey(x => x.DeletionRequestId);
+            e.Property(x => x.DeletionRequestId).HasColumnName("deletion_request_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.TargetScope).HasColumnName("target_scope");
+            e.Property(x => x.TargetId).HasColumnName("target_id");
+            e.Property(x => x.RequestedBy).HasColumnName("requested_by");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.TablesProcessed).HasColumnName("tables_processed").HasColumnType("jsonb");
+            e.Property(x => x.ErrorDetails).HasColumnName("error_details");
+            e.Property(x => x.RequestedAt).HasColumnName("requested_at");
+            e.Property(x => x.ProcessingStartedAt).HasColumnName("processing_started_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.Property(x => x.ConfirmationSentAt).HasColumnName("confirmation_sent_at");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+        });
+
+        modelBuilder.Entity<DataRetentionPolicy>(e =>
+        {
+            e.ToTable("data_retention_policies");
+            e.HasKey(x => x.PolicyId);
+            e.Property(x => x.PolicyId).HasColumnName("policy_id");
+            e.Property(x => x.EntityType).HasColumnName("entity_type");
+            e.Property(x => x.RetentionDays).HasColumnName("retention_days");
+            e.Property(x => x.AnonymisationRule).HasColumnName("anonymisation_rule");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.LastExecutedAt).HasColumnName("last_executed_at");
+            e.Property(x => x.RowsAffectedLastRun).HasColumnName("rows_affected_last_run");
+            e.Property(x => x.CreatedByOperatorId).HasColumnName("created_by_operator_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.EntityType).IsUnique();
+        });
+
+        modelBuilder.Entity<FeatureFlag>(e =>
+        {
+            e.ToTable("feature_flags");
+            e.HasKey(x => x.FeatureFlagId);
+            e.Property(x => x.FeatureFlagId).HasColumnName("feature_flag_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.FlagName).HasColumnName("flag_name");
+            e.Property(x => x.IsEnabled).HasColumnName("is_enabled");
+            e.Property(x => x.ChangedByOperatorId).HasColumnName("changed_by_operator_id");
+            e.Property(x => x.ChangedAt).HasColumnName("changed_at");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.TenantId, x.FlagName }).IsUnique();
+        });
+
+        modelBuilder.Entity<LaunchReadinessGate>(e =>
+        {
+            e.ToTable("launch_readiness_gates");
+            e.HasKey(x => x.GateId);
+            e.Property(x => x.GateId).HasColumnName("gate_id");
+            e.Property(x => x.EvaluationName).HasColumnName("evaluation_name");
+            e.Property(x => x.CriteriaResults).HasColumnName("criteria_results").HasColumnType("jsonb");
+            e.Property(x => x.OverallStatus).HasColumnName("overall_status");
+            e.Property(x => x.EvaluatedBy).HasColumnName("evaluated_by");
+            e.Property(x => x.EvaluatedAt).HasColumnName("evaluated_at");
+        });
+
+        modelBuilder.Entity<TenantHealthView>(e =>
+        {
+            e.ToTable("tenant_health_views");
+            e.HasKey(x => x.TenantHealthId);
+            e.Property(x => x.TenantHealthId).HasColumnName("tenant_health_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.TenantType).HasColumnName("tenant_type");
+            e.Property(x => x.SubscriptionStatus).HasColumnName("subscription_status");
+            e.Property(x => x.PlanTier).HasColumnName("plan_tier");
+            e.Property(x => x.ActiveStudentCount).HasColumnName("active_student_count");
+            e.Property(x => x.MonthlySessionCount).HasColumnName("monthly_session_count");
+            e.Property(x => x.MonthlyAiCostEgp).HasColumnName("monthly_ai_cost_egp").HasColumnType("decimal(10,4)");
+            e.Property(x => x.StorageUsageMb).HasColumnName("storage_usage_mb");
+            e.Property(x => x.EngagementScore).HasColumnName("engagement_score").HasColumnType("decimal(3,2)");
+            e.Property(x => x.AtRiskStudentCount).HasColumnName("at_risk_student_count");
+            e.Property(x => x.LastActivityAt).HasColumnName("last_activity_at");
+            e.Property(x => x.ComputedAt).HasColumnName("computed_at");
+            e.HasIndex(x => x.TenantId).IsUnique();
+        });
+
+        modelBuilder.Entity<Phase6OperationalEvent>(e =>
+        {
+            e.ToTable("phase6_operational_events");
+            e.HasKey(x => x.EventId);
+            e.Property(x => x.EventId).HasColumnName("event_id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.EventKind).HasColumnName("event_kind");
+            e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
+            e.Property(x => x.SchemaVersion).HasColumnName("schema_version");
+            e.HasIndex(x => new { x.DispatchedAt, x.OccurredAt });
+            e.HasIndex(x => x.CorrelationId);
+        });
+    }
+
+    private void ApplyPhase6TenantFilters(ModelBuilder modelBuilder)
+    {
+        ApplyTenantFilter<Subscription>(modelBuilder);
+        ApplyTenantFilter<Invoice>(modelBuilder);
+        ApplyTenantFilter<PaymentTransaction>(modelBuilder);
+        ApplyTenantFilter<NotificationDeliveryReceipt>(modelBuilder);
+        ApplyTenantFilter<AIOperationsMetric>(modelBuilder);
+        ApplyTenantFilter<AuditEntry>(modelBuilder);
+        ApplyTenantFilter<DataDeletionRequest>(modelBuilder);
+        ApplyTenantFilter<FeatureFlag>(modelBuilder);
     }
 
     private void ApplyPhase5TenantFilters(ModelBuilder modelBuilder)

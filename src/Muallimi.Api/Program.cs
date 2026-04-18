@@ -1,4 +1,10 @@
 using Muallimi.Api.AiOperations;
+using Muallimi.Api.AiOperations.AlertRuleEngine;
+using Muallimi.Api.AiOperations.MetricAggregation;
+using Muallimi.Api.Billing;
+using Muallimi.Api.Notifications.DeliveryTracking;
+using Muallimi.Api.Notifications.ProductionProviderBindings;
+using Muallimi.Api.Notifications.RetryAndDeadLetter;
 using Muallimi.Api.Audit;
 using Muallimi.Api.Coverage;
 using Muallimi.Api.Engagement.AtRiskDetection;
@@ -59,6 +65,10 @@ using Muallimi.Api.StudentExperience.Tenancy;
 using Muallimi.Api.StudentExperience.TutorExposure;
 using Muallimi.Api.StudentExperience.Whiteboard;
 using Muallimi.Api.TutorExposure;
+using Muallimi.Api.Billing.EntitlementEnforcement;
+using Muallimi.Api.Observability.DistributedTracing;
+using Muallimi.Api.Observability.HealthChecks;
+using Muallimi.Api.AiOperations.IncidentManagement;
 using Muallimi.Application.Audit;
 using Muallimi.Infrastructure.AiOperations;
 using Muallimi.Infrastructure.BlobStorage;
@@ -74,6 +84,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog((context, config) => config
     .ReadFrom.Configuration(context.Configuration)
     .Enrich.FromLogContext()
+    .Enrich.With<Muallimi.Api.Security.PIIMasking.PIIMaskingEnricher>()
+    .Enrich.WithProperty("service_name", "main-backend")
     .WriteTo.Console()
     .WriteTo.Seq(context.Configuration["Seq:Url"] ?? "http://localhost:5341"));
 
@@ -316,6 +328,85 @@ builder.Services.AddPhase5SeatWarningNotifier();
 builder.Services.AddPhase5LicenseManagementService();
 builder.Services.AddPhase5FeatureGateEvaluator();
 
+// ── Phase 6: SaaS Operations, Billing, Security, and Launch Readiness ──
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<Muallimi.Api.Compliance.AuditTrail.AuditTrailWriter>();
+builder.Services.AddScoped<Muallimi.Api.DownstreamEvents.Phase6OperationalEventOutbox>();
+// Phase 6 US5: compliance (data rights + deletion + export + processing register)
+builder.Services.AddScoped<Muallimi.Api.Compliance.DataExport.IDataExportService, Muallimi.Api.Compliance.DataExport.DataExportService>();
+Muallimi.Api.Compliance.DataDeletion.DataDeletionServiceExtensions.AddPhase6DataDeletionService(builder.Services);
+// Phase 6 US8: Audit trail query/export + data retention service + seed worker
+builder.Services.AddScoped<Muallimi.Api.Compliance.AuditTrail.AuditTrailQueryService>();
+builder.Services.AddScoped<Muallimi.Api.Compliance.AuditTrail.AuditTrailExportService>();
+builder.Services.AddSingleton<Muallimi.Api.Compliance.AuditTrail.AuditTrailExportStore>();
+builder.Services.AddScoped<Muallimi.Api.Compliance.DataRetention.DataRetentionService>();
+builder.Services.AddHostedService<Muallimi.Api.Compliance.DataRetention.DataRetentionHostedService>();
+builder.Services.AddScoped<Muallimi.Api.OperatorManagement.FeatureFlags.FeatureFlagService>();
+builder.Services.AddScoped<Muallimi.Api.OperatorManagement.TenantHealth.TenantHealthRollupService>();
+builder.Services.AddScoped<Muallimi.Api.OperatorManagement.Impersonation.ImpersonationService>();
+builder.Services.AddScoped<Muallimi.Api.OperatorManagement.LaunchReadinessGate.LaunchReadinessGateEvaluator>();
+builder.Services.AddSingleton<Muallimi.Api.Security.DataEncryption.IDataEncryptionAdapter>(sp =>
+    Muallimi.Api.Security.DataEncryption.LocalAesGcmEncryptionAdapter.FromConfiguration(
+        sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentProviderAdapter,
+    Muallimi.Api.Payments.LocalPaymentStub.LocalPaymentStub>();
+builder.Services.AddHostedService<Muallimi.Api.DownstreamEvents.Phase6OperationalEventDispatcher>();
+builder.Services.AddHostedService<Muallimi.Api.Phase5EventConsumer.Phase5EventConsumer>();
+builder.Services.AddHostedService<Muallimi.Api.OperatorManagement.TenantHealth.TenantHealthViewUpdater>();
+
+// ── Phase 6 US1: Billing + Payments MVP ──
+builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionPlans.ISubscriptionPlanService,
+    Muallimi.Api.Billing.SubscriptionPlans.SubscriptionPlanService>();
+builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionLifecycle.ISubscriptionLifecycleService,
+    Muallimi.Api.Billing.SubscriptionLifecycle.SubscriptionLifecycleService>();
+builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionLifecycle.IPhase5LicenseSyncService,
+    Muallimi.Api.Billing.SubscriptionLifecycle.Phase5LicenseSyncService>();
+builder.Services.AddScoped<Muallimi.Api.Billing.InvoiceGeneration.IInvoiceGenerationService,
+    Muallimi.Api.Billing.InvoiceGeneration.InvoiceGenerationService>();
+builder.Services.AddScoped<Muallimi.Api.Payments.IPaymentTransactionService,
+    Muallimi.Api.Payments.PaymentTransactionService>();
+builder.Services.AddScoped<Muallimi.Api.Payments.RefundProcessing.IRefundService,
+    Muallimi.Api.Payments.RefundProcessing.RefundService>();
+// ── Phase 6 US7: Payment provider integration extensions (T109–T113) ──
+builder.Services.AddScoped<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentMethodManagementService,
+    Muallimi.Api.Payments.PaymentProviderAdapter.PaymentMethodManagementService>();
+builder.Services.AddSingleton<Muallimi.Api.Payments.WebhookProcessing.IWebhookSignatureValidator,
+    Muallimi.Api.Payments.WebhookProcessing.LocalStubHmacSignatureValidator>();
+builder.Services.AddSingleton<Muallimi.Api.Payments.WebhookProcessing.WebhookSignatureValidatorRegistry>();
+builder.Services.AddScoped<Muallimi.Api.Payments.Idempotency.PaymentIdempotencyService>();
+builder.Services.Configure<Muallimi.Api.Payments.RetryPolicy.PaymentRetryOptions>(_ => { });
+builder.Services.AddSingleton<Muallimi.Api.Payments.RetryPolicy.PaymentRetryScheduler>();
+builder.Services.AddHostedService<Muallimi.Api.Payments.RetryPolicy.PaymentRetryHostedService>();
+builder.Services.Configure<Muallimi.Api.Billing.BillingCycleEngine.BillingCycleEngineOptions>(_ => { });
+builder.Services.AddSingleton<Muallimi.Api.Billing.BillingCycleEngine.BillingCycleEngine>();
+builder.Services.AddSingleton<Muallimi.Api.Billing.BillingCycleEngine.IBillingCycleEngine>(sp =>
+    sp.GetRequiredService<Muallimi.Api.Billing.BillingCycleEngine.BillingCycleEngine>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<Muallimi.Api.Billing.BillingCycleEngine.BillingCycleEngine>());
+
+// ── Phase 6 US2: Multi-channel notification delivery ──
+builder.Services.AddPhase6ProductionProviderBindings();
+builder.Services.AddPhase6NotificationDeliveryTracker();
+builder.Services.Configure<Muallimi.Api.Notifications.RetryAndDeadLetter.NotificationRetryHostedServiceOptions>(_ => { });
+builder.Services.AddPhase6NotificationRetryService();
+builder.Services.AddPhase6BillingNotificationDispatcher();
+
+// ── Phase 6 US3: AI Operations Dashboard ──
+builder.Services.AddPhase6AIMetricConsumer();
+builder.Services.Configure<Muallimi.Api.AiOperations.AlertRuleEngine.AlertRuleEvaluatorOptions>(_ => { });
+builder.Services.AddPhase6AlertRuleEvaluator();
+
+// ── Phase 6 US4: Observability, Logging, and Incident Response ──
+builder.Services.AddScoped<Muallimi.Api.Observability.DistributedTracing.DistributedTraceQueryService>();
+builder.Services.AddScoped<Muallimi.Api.AiOperations.IncidentManagement.IIncidentManagementService,
+    Muallimi.Api.AiOperations.IncidentManagement.IncidentManagementService>();
+builder.Services.AddHttpClient("health-alert");
+builder.Services.Configure<Muallimi.Api.Observability.HealthChecks.HealthCheckAlertOptions>(
+    builder.Configuration.GetSection("HealthCheckAlerts"));
+builder.Services.AddSingleton<Muallimi.Api.Observability.HealthChecks.IHealthAlertSink,
+    Muallimi.Api.Observability.HealthChecks.LoggingHealthAlertSink>();
+builder.Services.AddHostedService<Muallimi.Api.Observability.HealthChecks.HealthCheckAlertService>();
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -334,6 +425,11 @@ var app = builder.Build();
 
 // Middleware pipeline
 app.UseCors();
+// Phase 6 US5: Transport security (TLS/HSTS/baseline headers) + child-safety controls
+Muallimi.Api.Security.TransportSecurity.TransportSecurityExtensions.UsePhase6TransportSecurity(app);
+Muallimi.Api.Security.ChildSafetyControls.ChildSafetyControlsExtensions.UsePhase6ChildSafetyControls(app);
+// Phase 6 US5: Wire column-encryption adapter for EF value converters
+Muallimi.Api.Security.DataEncryption.ColumnEncryptionWiring.UsePhase6ColumnEncryption(app);
 app.UseCorrelationId();
 
 if (app.Environment.IsDevelopment())
@@ -342,8 +438,21 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Health check
+// Health check (legacy + Phase 6 readiness/liveness/startup probes)
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "muallimi-main-backend" }));
+app.MapPhase6HealthChecks();
+
+// Phase 6: Entitlement enforcement on authenticated requests
+app.UsePhase6EntitlementEnforcement();
+
+// Phase 6 US1: Billing + Payments endpoints
+Muallimi.Api.Billing.BillingEndpoints.MapBillingEndpoints(app);
+Muallimi.Api.Payments.WebhookProcessing.PaymentWebhookEndpoints.MapPaymentWebhooks(app);
+// Phase 6 US5: Compliance (data rights + processing register) endpoints
+Muallimi.Api.Compliance.ComplianceEndpoints.MapComplianceEndpoints(app);
+// Phase 6 US8: Audit trail + data retention operator endpoints
+Muallimi.Api.Compliance.AuditTrail.AuditTrailEndpoints.MapAuditTrailEndpoints(app);
+Muallimi.Api.Compliance.DataRetention.DataRetentionEndpoints.MapDataRetentionEndpoints(app);
 
 // ── Phase 3 US1: Student Experience endpoints (session lifecycle + plan gate) ──
 app.MapStudentExperience();
@@ -2056,9 +2165,32 @@ app.MapProviderBindingEndpoints();
 
 // ── Phase 2 US6 (T102): AI operations query surface (requests / metrics / refusals / readiness) ──
 app.MapAiOperationsEndpoints();
+app.MapPhase6AiOperationsEndpoints();
+
+// ── Phase 6 US4 (T078/T081): Distributed trace + incident management ──
+app.MapDistributedTracingEndpoints();
+app.MapIncidentManagementEndpoints();
+
+// ── Phase 6 US6 (T100-T102): Operator platform management + tenant health ──
+Muallimi.Api.OperatorManagement.OperatorEndpoints.MapOperatorManagementEndpoints(app);
+Muallimi.Api.OperatorManagement.LaunchReadinessGate.LaunchReadinessGateEndpoints.MapLaunchReadinessGateEndpoints(app);
 
 // ── Phase 2 US7 (T114/T117): Red-team results query surface ──
 app.MapRedTeamResultsEndpoints();
+
+// ── Phase 6 US8 (T119): seed default retention policies if missing ──
+using (var seedScope = app.Services.CreateScope())
+{
+    try
+    {
+        var db = seedScope.ServiceProvider.GetRequiredService<Muallimi.Infrastructure.Persistence.MuallimiDbContext>();
+        await Muallimi.Api.Compliance.DataRetention.DefaultRetentionPolicySeeder.EnsureSeededAsync(db);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "data_retention.seed_skipped");
+    }
+}
 
 app.Run();
 

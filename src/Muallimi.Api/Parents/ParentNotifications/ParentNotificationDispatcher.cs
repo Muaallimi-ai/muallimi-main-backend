@@ -159,7 +159,8 @@ public sealed class ParentNotificationDispatcher : IParentNotificationDispatcher
         }
         notification.Channel = channel;
 
-        var deferUntil = preferences.ResolveQuietHoursDeferral(profile.Timezone, DateTime.UtcNow);
+        var deferUntil = Muallimi.Api.Notifications.QuietHoursPolicy.ResolveDeferral(
+            preferences, profile.Timezone, DateTime.UtcNow, input.NotificationKind);
         if (deferUntil is not null)
         {
             notification.DeliveryState = "deferred";

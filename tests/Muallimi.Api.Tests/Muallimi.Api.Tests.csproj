@@ -96,4 +96,9 @@
     <Compile Include="..\integration\SchoolManagement\RosterImport\LargeRosterTests.cs" LinkBase="integration\SchoolManagement\RosterImport" />
   </ItemGroup>
 
+  <!-- Phase 6 US1 billing + payments integration tests (T033–T046). -->
+  <ItemGroup>
+    <Compile Include="..\integration\SaasOperations\**\*.cs" LinkBase="integration\SaasOperations" />
+  </ItemGroup>
+
 </Project>
