@@ -1,0 +1,152 @@
+# Muaallimi application services — overlay for docker-compose.local.yml.
+#
+# Apps join the same compose network as infra services so they can reach
+# them by service name (postgres, redis, rabbitmq, minio, seq, ai-service).
+# Host-published ports are preserved so you can curl them directly:
+#
+#   frontend      http://localhost:3000
+#   main-backend  http://localhost:5063/health
+#   ai-service    http://localhost:5272/health
+#
+# Bring the full stack up from the planning-docs scripts/start.sh, which
+# runs:
+#   docker compose -f docker-compose.local.yml -f docker-compose.apps.yml up -d
+#
+# Build context for each app is its sibling repo relative to this file
+# (which lives at muallimi-main-backend/infra/docker-compose.apps.yml).
+
+services:
+  ai-service:
+    build:
+      context: ../../muallimi-ai-service
+      dockerfile: Dockerfile
+    container_name: muallimi-ai-service
+    ports:
+      - "5272:5272"
+    environment:
+      ASPNETCORE_URLS: http://+:5272
+      ASPNETCORE_ENVIRONMENT: Development
+      DocumentIngestion__BaseUrl: http://ingestion:5082
+      # RedTeam scenario root — container has no host-side relative paths.
+      # Leave empty so AddRedTeamServices falls back to its in-image
+      # seed; red-team evaluation is opt-in and not required for boot.
+      RedTeam__ScenarioSetRoot: /app/redteam-scenarios
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5272/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  main-backend:
+    build:
+      context: ../../muallimi-main-backend
+      dockerfile: Dockerfile
+    container_name: muallimi-main-backend
+    ports:
+      - "5063:5063"
+    environment:
+      ASPNETCORE_URLS: http://+:5063
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=muallimi_dev;Username=muallimi;Password=muallimi_local"
+      ConnectionStrings__Redis: "redis:6379"
+      RabbitMq__Hostname: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: muallimi
+      RabbitMq__Password: muallimi_local
+      Minio__Endpoint: "minio:9000"
+      Minio__AccessKey: muallimi
+      Minio__SecretKey: muallimi_local
+      Minio__UseSsl: "false"
+      Minio__CurriculumBucket: muallimi-curriculum-local
+      Seq__Url: http://seq:5341
+      AiService__BaseUrl: http://ai-service:5272
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5063/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+    restart: unless-stopped
+
+  ingestion:
+    build:
+      context: ../../muallimi-document-ingestion
+      dockerfile: Dockerfile
+    container_name: muallimi-ingestion
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=muallimi_dev;Username=muallimi;Password=muallimi_local"
+      RabbitMq__Hostname: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: muallimi
+      RabbitMq__Password: muallimi_local
+      Minio__Endpoint: "minio:9000"
+      Minio__AccessKey: muallimi
+      Minio__SecretKey: muallimi_local
+      Minio__UseSsl: "false"
+      Minio__CurriculumBucket: muallimi-curriculum-local
+      Seq__Url: http://seq:5341
+      AiService__BaseUrl: http://ai-service:5272
+      MainBackend__BaseUrl: http://main-backend:5063
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+      main-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../Muaallimi-Platform
+      dockerfile: Dockerfile
+    container_name: muallimi-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      # Browser-visible URLs — the user's machine hits localhost, not the
+      # compose network. SSR fetches (if any) hit the same URL via the
+      # host-published port, which still works from inside the container.
+      #
+      # client.ts splits calls into five logical APIs (auth/user/curriculum/
+      # aiTutor/analytics) assuming microservice-per-port, but the actual
+      # backend is a modular monolith on :5063 — point every base URL
+      # there so the route prefixes resolve on the real server.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:5063
+      NEXT_PUBLIC_AUTH_API_URL: http://localhost:5063
+      NEXT_PUBLIC_USER_API_URL: http://localhost:5063
+      NEXT_PUBLIC_CURRICULUM_API_URL: http://localhost:5063
+      NEXT_PUBLIC_AI_TUTOR_API_URL: http://localhost:5063
+      NEXT_PUBLIC_ANALYTICS_API_URL: http://localhost:5063
+    depends_on:
+      main-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    restart: unless-stopped

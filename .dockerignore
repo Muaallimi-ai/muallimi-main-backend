@@ -1,0 +1,13 @@
+**/bin
+**/obj
+.git
+.gitignore
+.vs
+.vscode
+.idea
+*.user
+docs
+contracts
+.run
+infra
+db
