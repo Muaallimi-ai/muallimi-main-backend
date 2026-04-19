@@ -27,6 +27,12 @@ services:
       ASPNETCORE_URLS: http://+:5272
       ASPNETCORE_ENVIRONMENT: Development
       DocumentIngestion__BaseUrl: http://ingestion:5082
+      OpenAI__ApiKey: ${OpenAI__ApiKey:-}
+      OpenAI__EmbeddingModel: ${OpenAI__EmbeddingModel:-text-embedding-3-small}
+      OpenAI__BaseUrl: ${OpenAI__BaseUrl:-https://api.openai.com}
+      Anthropic__ApiKey: ${Anthropic__ApiKey:-}
+      Anthropic__CompletionModel: ${Anthropic__CompletionModel:-claude-sonnet-4-6}
+      Anthropic__BaseUrl: ${Anthropic__BaseUrl:-https://api.anthropic.com}
       # RedTeam scenario root — container has no host-side relative paths.
       # Leave empty so AddRedTeamServices falls back to its in-image
       # seed; red-team evaluation is opt-in and not required for boot.
@@ -104,6 +110,11 @@ services:
       Seq__Url: http://seq:5341
       AiService__BaseUrl: http://ai-service:5272
       MainBackend__BaseUrl: http://main-backend:5063
+      # Anthropic — used by ClaudePdfOcrAdapter for scanned PDFs (no text layer).
+      # When unset, the worker falls back to the LocalOcrAdapter stub.
+      Anthropic__ApiKey: ${Anthropic__ApiKey:-}
+      Anthropic__CompletionModel: ${Anthropic__CompletionModel:-claude-sonnet-4-6}
+      Anthropic__BaseUrl: ${Anthropic__BaseUrl:-https://api.anthropic.com}
     depends_on:
       postgres:
         condition: service_healthy

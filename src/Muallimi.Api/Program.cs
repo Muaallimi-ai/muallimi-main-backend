@@ -7,6 +7,7 @@ using Muallimi.Api.Notifications.ProductionProviderBindings;
 using Muallimi.Api.Notifications.RetryAndDeadLetter;
 using Muallimi.Api.Audit;
 using Muallimi.Api.Coverage;
+using Muallimi.Api.Curriculum;
 using Muallimi.Api.Engagement.AtRiskDetection;
 using Muallimi.Api.Engagement.BadgeAwarding;
 using Muallimi.Api.Engagement.DownstreamEvents;
@@ -438,12 +439,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Phase 6: Entitlement enforcement on authenticated requests
+// MUST be registered BEFORE any MapXxx call. In ASP.NET Core, calling
+// UseMiddleware AFTER routes have been mapped causes the EndpointRouteBuilder
+// to be re-created, dropping all previously-registered routes from the
+// effective pipeline. (Symptom: routes compile in the DLL and the MapGet
+// runs at startup, but requests return route-level 404 with no body.)
+app.UsePhase6EntitlementEnforcement();
+// Phase 4 US2 — operator impersonation middleware. Same constraint as above:
+// must run BEFORE any MapXxx, otherwise routes registered after this call
+// land in a freshly-created EndpointRouteBuilder that the request pipeline
+// never sees, so they 404 at runtime even though the DLL contains them.
+app.UseOperatorImpersonation();
+
 // Health check (legacy + Phase 6 readiness/liveness/startup probes)
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "muallimi-main-backend" }));
 app.MapPhase6HealthChecks();
-
-// Phase 6: Entitlement enforcement on authenticated requests
-app.UsePhase6EntitlementEnforcement();
 
 // Phase 6 US1: Billing + Payments endpoints
 Muallimi.Api.Billing.BillingEndpoints.MapBillingEndpoints(app);
@@ -460,8 +471,7 @@ app.MapStudentExperience();
 // ── Phase 4 US1: Student Progress Surface (mastery / streak / badges / focus areas) ──
 app.MapStudentProgressSurface();
 
-// ── Phase 4 US2: Operator impersonation middleware + Parent dashboard endpoints ──
-app.UseOperatorImpersonation();
+// ── Phase 4 US2: Parent dashboard endpoints (impersonation middleware moved up to pre-route block) ──
 app.MapParents();
 
 // ── Phase 4 US3: Weekly report view / share / regenerate + shared-report public route ──
@@ -483,6 +493,11 @@ app.MapAnnouncements();
 app.MapSchoolReports();
 
 // ── Curriculum Admin API: Upload & Ingestion ──
+
+app.MapCurriculumSourceList();
+app.MapCurriculumNodeChunks();
+app.MapCurriculumSourcePipeline();
+app.MapCurriculumSourceDelete();
 
 app.MapPost("/admin/curriculum/upload", async (
     HttpContext httpContext,
@@ -559,7 +574,8 @@ app.MapPost("/admin/curriculum/upload", async (
     var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
 
     var source = Muallimi.Domain.Curriculum.CurriculumSource.Create(
-        ctEnum, gradeEnum, subjectEnum, academicYear, langEnum, format, storageKey, contentHash, actor);
+        ctEnum, gradeEnum, subjectEnum, academicYear, langEnum, format, storageKey, contentHash, actor,
+        originalFileName: file.FileName);
 
     var job = Muallimi.Domain.Content.IngestionJob.Create(source.SourceId, correlationId);
 
@@ -2012,7 +2028,8 @@ app.MapPost("/admin/curriculum/{sourceId:guid}/update", async (
         format,
         storageKey,
         contentHash,
-        actor);
+        actor,
+        originalFileName: file.FileName);
 
     var job = Muallimi.Domain.Content.IngestionJob.Create(newSource.SourceId, correlationId);
 

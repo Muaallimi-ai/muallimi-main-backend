@@ -178,6 +178,7 @@ public class MuallimiDbContext : DbContext
             e.Property(x => x.TutorLanguage).HasColumnName("tutor_language").HasConversion<string>();
             e.Property(x => x.FileFormat).HasColumnName("file_format").HasConversion<string>();
             e.Property(x => x.StorageKey).HasColumnName("storage_key");
+            e.Property(x => x.OriginalFileName).HasColumnName("original_file_name");
             e.Property(x => x.UploadActor).HasColumnName("upload_actor");
             e.Property(x => x.UploadedAt).HasColumnName("uploaded_at");
             e.Property(x => x.ContentHash).HasColumnName("content_hash");

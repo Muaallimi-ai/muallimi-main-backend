@@ -12,6 +12,7 @@ public class CurriculumSource
     public TutorLanguage TutorLanguage { get; private set; }
     public FileFormat FileFormat { get; private set; }
     public string StorageKey { get; private set; } = string.Empty;
+    public string? OriginalFileName { get; private set; }
     public string UploadActor { get; private set; } = string.Empty;
     public DateTime UploadedAt { get; private set; }
     public string ContentHash { get; private set; } = string.Empty;
@@ -28,7 +29,8 @@ public class CurriculumSource
         FileFormat fileFormat,
         string storageKey,
         string contentHash,
-        string uploadActor)
+        string uploadActor,
+        string? originalFileName = null)
     {
         if (string.IsNullOrWhiteSpace(academicYear))
             throw new ArgumentException("Academic year is required.", nameof(academicYear));
@@ -53,6 +55,7 @@ public class CurriculumSource
             TutorLanguage = tutorLanguage,
             FileFormat = fileFormat,
             StorageKey = storageKey,
+            OriginalFileName = string.IsNullOrWhiteSpace(originalFileName) ? null : originalFileName.Trim(),
             ContentHash = contentHash,
             UploadActor = uploadActor,
             UploadedAt = DateTime.UtcNow,

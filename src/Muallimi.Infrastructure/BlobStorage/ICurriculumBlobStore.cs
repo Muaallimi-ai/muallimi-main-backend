@@ -17,5 +17,11 @@ public interface ICurriculumBlobStore
         string contentType,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Best-effort delete of a previously uploaded object.
+    /// Does NOT throw if the object is missing.
+    /// </summary>
+    Task DeleteAsync(string objectKey, CancellationToken ct = default);
+
     string BucketName { get; }
 }

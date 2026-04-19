@@ -42,6 +42,24 @@ public sealed class MinioCurriculumBlobStore : ICurriculumBlobStore
         return objectKey;
     }
 
+    public async Task DeleteAsync(string objectKey, CancellationToken ct = default)
+    {
+        try
+        {
+            var args = new RemoveObjectArgs()
+                .WithBucket(BucketName)
+                .WithObject(objectKey);
+            await _client.RemoveObjectAsync(args, ct);
+            _logger.LogInformation("Deleted {ObjectKey} from bucket {Bucket}", objectKey, BucketName);
+        }
+        catch (Exception ex)
+        {
+            // Object may already be gone; we treat delete as best-effort so the
+            // DB cascade can still complete cleanly.
+            _logger.LogWarning(ex, "Failed to delete {ObjectKey} from bucket {Bucket}", objectKey, BucketName);
+        }
+    }
+
     private async Task EnsureBucketAsync(CancellationToken ct)
     {
         var exists = await _client.BucketExistsAsync(new BucketExistsArgs().WithBucket(BucketName), ct);
