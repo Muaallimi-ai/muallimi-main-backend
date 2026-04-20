@@ -454,7 +454,14 @@ internal static class AuthClaimsReader
             failReason = "invalid_token_claims";
             return false;
         }
-        var roles = principal.FindAll("roles").Select(c => c.Value).ToArray();
+        // .NET's JwtSecurityTokenHandler has MapInboundClaims=true by default,
+        // which remaps the JWT "roles" claim to ClaimTypes.Role via its
+        // DefaultInboundClaimTypeMap. Check both — the short name (when
+        // mapping is disabled) and the mapped URI (when it isn't).
+        var roles = principal.FindAll("roles").Select(c => c.Value)
+            .Concat(principal.FindAll(ClaimTypes.Role).Select(c => c.Value))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         claims = new AuthClaims(userId, tenantId, sessionId, roles);
         http.User = principal;
         return true;

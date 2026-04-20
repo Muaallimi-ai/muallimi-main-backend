@@ -75,6 +75,11 @@ services:
       Mailpit__SmtpHost: mailpit
       Mailpit__SmtpPort: "1025"
       Mailpit__FromAddress: noreply@muallimi.local
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-super@muallimi.local}
+      SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:-Muallimi@Admin2024!}
+      SUPER_ADMIN_ROLES: ${SUPER_ADMIN_ROLES:-super-admin,platform-operator}
+      SUPER_ADMIN_FULL_NAME: ${SUPER_ADMIN_FULL_NAME:-Super Admin}
+      SUPER_ADMIN_LOCALE: ${SUPER_ADMIN_LOCALE:-ar}
     depends_on:
       postgres:
         condition: service_healthy
