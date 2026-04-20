@@ -1,7 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 
 namespace Muallimi.Api.Notifications.ProductionProviderBindings;
 
@@ -34,7 +34,7 @@ public sealed class EmailProviderBinding : INotificationChannelAdapter
     {
         var rendered = RenderHtml(request);
         var payload = new EmailPayload(
-            Recipient: request.ParentProfileId.ToString("D"),
+            Recipient: request.RecipientEmail ?? request.RecipientUserId.ToString("D"),
             Language: request.Language,
             Subject: request.Title,
             HtmlBody: rendered,

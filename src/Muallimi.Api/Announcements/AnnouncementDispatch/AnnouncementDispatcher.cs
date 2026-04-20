@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Muallimi.Api.Announcements.AnnouncementCreation;
 using Muallimi.Api.Parents.ParentNotifications;
 using Muallimi.Api.SchoolManagement.DownstreamEvents;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Infrastructure.Persistence;
 
@@ -104,8 +105,8 @@ public sealed class AnnouncementDispatcher : IAnnouncementDispatcher
                 var adapter = _channels.Get(channel);
                 await adapter.DispatchAsync(new NotificationDispatchRequest(
                     TenantId: row.TenantId,
-                    ParentProfileId: recipient.RecipientRole == "parent" ? recipient.RecipientId : Guid.Empty,
-                    ChildId: recipient.RecipientRole == "student" ? recipient.RecipientId : Guid.Empty,
+                    RecipientUserId: recipient.RecipientId,
+                    RecipientEmail: null,
                     NotificationKind: "announcement",
                     Language: "ar",
                     Title: row.TitleAr,

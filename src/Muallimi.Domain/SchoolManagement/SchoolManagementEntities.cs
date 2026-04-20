@@ -1,5 +1,5 @@
 using System;
-using Muallimi.Domain.StudentExperience;
+using Muallimi.Domain.Shared;
 
 namespace Muallimi.Domain.SchoolManagement;
 
@@ -36,6 +36,8 @@ public class SchoolAdministrator : ITenantScoped
     public DateTime? TermsAcceptedAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? DeactivatedAt { get; set; }
+    /// <summary>Phase 9 identity FK. Populated by the legacy backfill (US7). Null until linked.</summary>
+    public Guid? UserId { get; set; }
 }
 
 public class Teacher : ITenantScoped
@@ -48,6 +50,8 @@ public class Teacher : ITenantScoped
     public string DisplayNameEn { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public DateTime? DeactivatedAt { get; set; }
+    /// <summary>Phase 9 identity FK. Populated by the legacy backfill (US7). Null until linked.</summary>
+    public Guid? UserId { get; set; }
 }
 
 public class ClassGroup : ITenantScoped

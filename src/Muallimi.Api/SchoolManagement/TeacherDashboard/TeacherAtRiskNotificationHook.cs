@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Infrastructure.Persistence;
 
@@ -109,8 +110,8 @@ public sealed class TeacherAtRiskNotificationHook : ITeacherAtRiskNotificationHo
             var receipt = await adapter.DispatchAsync(
                 new NotificationDispatchRequest(
                     TenantId: tenantId,
-                    ParentProfileId: teacher.TeacherId,
-                    ChildId: studentId,
+                    RecipientUserId: teacher.TeacherId,
+                    RecipientEmail: null,
                     NotificationKind: "teacher_at_risk",
                     Language: "ar",
                     Title: "طالب قد يحتاج دعمًا إضافيًا",

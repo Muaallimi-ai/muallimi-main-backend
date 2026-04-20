@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Muallimi.Api.Notifications.DeliveryTracking;
 using Muallimi.Api.Notifications.ProductionProviderBindings;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Xunit;
 
 namespace Muallimi.Api.Tests.Integration.SaasOperations.Notifications;

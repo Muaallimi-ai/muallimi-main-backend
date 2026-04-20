@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Muallimi.Api.Parents.ParentDashboard;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.Parents;
 using Muallimi.Infrastructure.Persistence;
 
@@ -221,11 +222,13 @@ public sealed class ParentNotificationDispatcher : IParentNotificationDispatcher
             ["parent_notification_id"] = notification.ParentNotificationId.ToString("D"),
             ["notification_kind"] = notification.NotificationKind,
             ["deep_link"] = deepLink ?? string.Empty,
+            ["parent_profile_id"] = notification.ParentProfileId.ToString("D"),
+            ["child_id"] = notification.ChildId.ToString("D"),
         };
         var request = new NotificationDispatchRequest(
             TenantId: notification.TenantId,
-            ParentProfileId: notification.ParentProfileId,
-            ChildId: notification.ChildId,
+            RecipientUserId: notification.ParentProfileId,
+            RecipientEmail: null,
             NotificationKind: notification.NotificationKind,
             Language: notification.Language,
             Title: notification.NotificationKind,

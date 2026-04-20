@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 
 namespace Muallimi.Api.Notifications.ProductionProviderBindings;
 
@@ -68,7 +68,7 @@ public sealed class WhatsAppProviderBinding : INotificationChannelAdapter
     {
         var providerMessageId = await _sink.SendAsync(new WhatsAppMessage(
             TenantId: request.TenantId,
-            RecipientId: request.ParentProfileId,
+            RecipientId: request.RecipientUserId,
             NotificationKind: request.NotificationKind,
             Language: request.Language,
             Title: request.Title,

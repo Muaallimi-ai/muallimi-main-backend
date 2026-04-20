@@ -70,6 +70,9 @@ using Muallimi.Api.Billing.EntitlementEnforcement;
 using Muallimi.Api.Observability.DistributedTracing;
 using Muallimi.Api.Observability.HealthChecks;
 using Muallimi.Api.AiOperations.IncidentManagement;
+using Muallimi.Api.Identity.Middleware;
+using Muallimi.Api.Identity.Startup;
+using Muallimi.Infrastructure.Identity.Seed;
 using Muallimi.Application.Audit;
 using Muallimi.Infrastructure.AiOperations;
 using Muallimi.Infrastructure.BlobStorage;
@@ -231,6 +234,12 @@ builder.Services.AddPhase4WeeklyReportGenerationJob();
 // Phase 4 (US7) — Parent notifications + preferences + local channel stubs.
 builder.Services.AddPhase4ParentNotificationRepository();
 builder.Services.AddPhase4LocalNotificationChannelStubs();
+
+// ── Phase 9: Identity & Authentication ───────────────────────────
+// Registers every identity service, the generalized notification sender,
+// the seeders, CORS policy, and (conditionally) Redis-backed adapters
+// when REDIS_CONNECTION_STRING is set.
+builder.Services.AddIdentityModule(builder.Configuration);
 builder.Services.AddPhase4ParentNotificationDispatcher();
 builder.Services.AddPhase4NotificationSchedulerHook();
 
@@ -424,6 +433,97 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// ── Phase 9 US3 T107 / US7 T166: migrate / seed / backfill CLI commands ──
+// `dotnet run -- migrate`  applies every EF migration and exits.
+// `dotnet run -- seed`     runs the Identity + retention seeders and exits.
+// `dotnet run -- backfill --source-schema <schema> [--dry-run] [--verify]`
+//                          runs or verifies the legacy AuthAPI backfill.
+// Any other arg list boots the web host as usual.
+if (args.Length > 0 && (string.Equals(args[0], "migrate", StringComparison.Ordinal)
+    || string.Equals(args[0], "seed", StringComparison.Ordinal)
+    || string.Equals(args[0], "backfill", StringComparison.Ordinal)))
+{
+    using var cliScope = app.Services.CreateScope();
+    var sp = cliScope.ServiceProvider;
+    if (args[0] == "migrate")
+    {
+        var db = sp.GetRequiredService<Muallimi.Infrastructure.Persistence.MuallimiDbContext>();
+        app.Logger.LogInformation("CLI migrate: applying EF migrations...");
+        await db.Database.MigrateAsync();
+        app.Logger.LogInformation("CLI migrate: complete.");
+    }
+    else
+    {
+        app.Logger.LogInformation("CLI seed: running identity + retention seeders...");
+        try
+        {
+            var retentionDb = sp.GetRequiredService<Muallimi.Infrastructure.Persistence.MuallimiDbContext>();
+            await Muallimi.Api.Compliance.DataRetention.DefaultRetentionPolicySeeder.EnsureSeededAsync(retentionDb);
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "CLI seed: retention policy seed skipped.");
+        }
+        var runner = sp.GetRequiredService<IdentitySeedRunner>();
+        await runner.RunAsync();
+        app.Logger.LogInformation("CLI seed: complete.");
+    }
+    return;
+}
+
+// ── Phase 9 US7 T166: backfill CLI ────────────────────────────────────────
+if (args.Length > 0 && string.Equals(args[0], "backfill", StringComparison.Ordinal))
+{
+    // Parse args: --source-schema <name>  [--dry-run | --verify]
+    var sourceSchema = "legacy_auth";
+    var dryRun = false;
+    var verify = false;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        if (args[i] == "--source-schema" && i + 1 < args.Length)
+            sourceSchema = args[++i];
+        else if (args[i] == "--dry-run")
+            dryRun = true;
+        else if (args[i] == "--verify")
+            verify = true;
+    }
+
+    using var backfillScope = app.Services.CreateScope();
+    var bsp = backfillScope.ServiceProvider;
+    var backfillRunner = bsp.GetRequiredService<Muallimi.Infrastructure.Identity.Adapters.BackfillScriptRunner>();
+
+    if (verify)
+    {
+        app.Logger.LogInformation("CLI backfill: verifying source-schema={Schema}...", sourceSchema);
+        var vr = await backfillRunner.VerifyAsync(sourceSchema);
+        if (!vr.Passed)
+        {
+            foreach (var f in vr.Failures)
+                app.Logger.LogError("Verify failure: {Failure}", f);
+            Environment.Exit(1);
+        }
+        app.Logger.LogInformation("CLI backfill verify: all invariants passed.");
+    }
+    else
+    {
+        app.Logger.LogInformation(
+            "CLI backfill [{Mode}]: source-schema={Schema}",
+            dryRun ? "dry-run" : "apply", sourceSchema);
+        var br = await backfillRunner.RunAsync(sourceSchema, dryRun);
+        if (br.Errors.Count > 0)
+        {
+            foreach (var e in br.Errors)
+                app.Logger.LogError("Backfill error: {Error}", e);
+            Environment.Exit(1);
+        }
+        app.Logger.LogInformation(
+            "CLI backfill complete: created={C} skipped={S} roles={R}",
+            br.UsersCreated, br.UsersSkipped, br.RolesGranted);
+    }
+    return;
+}
+
 // Middleware pipeline
 app.UseCors();
 // Phase 6 US5: Transport security (TLS/HSTS/baseline headers) + child-safety controls
@@ -431,6 +531,14 @@ Muallimi.Api.Security.TransportSecurity.TransportSecurityExtensions.UsePhase6Tra
 Muallimi.Api.Security.ChildSafetyControls.ChildSafetyControlsExtensions.UsePhase6ChildSafetyControls(app);
 // Phase 6 US5: Wire column-encryption adapter for EF value converters
 Muallimi.Api.Security.DataEncryption.ColumnEncryptionWiring.UsePhase6ColumnEncryption(app);
+
+// Phase 9: security headers + tenant-resolution middleware. Both run
+// BEFORE correlation-id + entitlement middleware so downstream handlers
+// see the resolved tenant and consistent response headers.
+app.UseIdentitySecurityHeaders();
+app.UseIdentityTenantResolution();
+app.UseImpersonationContext();
+
 app.UseCorrelationId();
 
 if (app.Environment.IsDevelopment())
@@ -455,6 +563,10 @@ app.UseOperatorImpersonation();
 // Health check (legacy + Phase 6 readiness/liveness/startup probes)
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "muallimi-main-backend" }));
 app.MapPhase6HealthChecks();
+
+// Phase 9: identity endpoint group (module probe today; full auth
+// endpoints land in US1-US7).
+app.MapIdentityEndpoints();
 
 // Phase 6 US1: Billing + Payments endpoints
 Muallimi.Api.Billing.BillingEndpoints.MapBillingEndpoints(app);
@@ -2207,6 +2319,17 @@ using (var seedScope = app.Services.CreateScope())
     {
         app.Logger.LogWarning(ex, "data_retention.seed_skipped");
     }
+}
+
+// ── Phase 9 (T047): seed Platform tenant + 8 system roles ──
+try
+{
+    var identitySeeds = app.Services.GetRequiredService<IdentitySeedRunner>();
+    await identitySeeds.RunAsync();
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "identity.seed_skipped");
 }
 
 app.Run();

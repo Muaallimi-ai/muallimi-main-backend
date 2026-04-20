@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Muallimi.Api.DownstreamEvents;
 using Muallimi.Api.Notifications.DeliveryTracking;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SaasOperations;
 using Muallimi.Infrastructure.Persistence;
 
@@ -139,8 +140,8 @@ public sealed class NotificationRetryService : INotificationRetryService
             var alert = _channels.Get("in_app");
             await alert.DispatchAsync(new NotificationDispatchRequest(
                 TenantId: receipt.TenantId,
-                ParentProfileId: receipt.RecipientId,
-                ChildId: Guid.Empty,
+                RecipientUserId: receipt.RecipientId,
+                RecipientEmail: null,
                 NotificationKind: "operator.notification_dead_lettered",
                 Language: "ar",
                 Title: "notification.dead_letter",

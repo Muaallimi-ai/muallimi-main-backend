@@ -101,4 +101,15 @@
     <Compile Include="..\integration\SaasOperations\**\*.cs" LinkBase="integration\SaasOperations" />
   </ItemGroup>
 
+  <!-- Phase 9 US1 identity contract + integration tests (T062–T068). -->
+  <ItemGroup>
+    <Compile Include="..\contract\Identity\Endpoints\**\*.cs" LinkBase="contract\Identity\Endpoints" />
+    <Compile Include="..\integration\Identity\**\*.cs" LinkBase="integration\Identity" />
+  </ItemGroup>
+
+  <!-- Phase 9 US7 backfill contract + integration tests (T162–T163). -->
+  <ItemGroup>
+    <Compile Include="..\contract\Identity\BackfillContractTests.cs" LinkBase="contract\Identity" />
+  </ItemGroup>
+
 </Project>

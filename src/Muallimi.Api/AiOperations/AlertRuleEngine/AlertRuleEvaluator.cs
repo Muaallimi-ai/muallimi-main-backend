@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SaasOperations;
 using Muallimi.Infrastructure.Persistence;
 
@@ -159,8 +160,8 @@ public sealed class AlertRuleEvaluator : IAlertRuleEvaluator
                 var adapter = _channels.Get(channelKey);
                 await adapter.DispatchAsync(new NotificationDispatchRequest(
                     TenantId: rule.TenantScope ?? Guid.Empty,
-                    ParentProfileId: t.OperatorId,
-                    ChildId: Guid.Empty,
+                    RecipientUserId: t.OperatorId,
+                    RecipientEmail: null,
                     NotificationKind: "operator.alert_fired",
                     Language: "ar",
                     Title: rule.RuleName,

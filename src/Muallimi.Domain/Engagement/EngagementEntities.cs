@@ -1,5 +1,5 @@
 using System;
-using Muallimi.Domain.StudentExperience;
+using Muallimi.Domain.Shared;
 
 namespace Muallimi.Domain.Engagement;
 

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Api.SchoolManagement.ClassManagement;
 using Muallimi.Api.SchoolManagement.TeacherAssignment;
 using Muallimi.Api.SchoolManagement.TeacherDashboard;

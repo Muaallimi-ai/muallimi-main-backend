@@ -12,9 +12,11 @@ using Muallimi.Domain.Review;
 using Muallimi.Domain.Engagement;
 using Muallimi.Domain.Parents;
 using Muallimi.Domain.SaasOperations;
+using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Domain.Shared;
 using Muallimi.Domain.StudentExperience;
+using Muallimi.Infrastructure.Identity.EfCore;
 
 namespace Muallimi.Infrastructure.Persistence;
 
@@ -154,6 +156,20 @@ public class MuallimiDbContext : DbContext
     public DbSet<LaunchReadinessGate> LaunchReadinessGates => Set<LaunchReadinessGate>();
     public DbSet<TenantHealthView> TenantHealthViews => Set<TenantHealthView>();
     public DbSet<Phase6OperationalEvent> Phase6OperationalEvents => Set<Phase6OperationalEvent>();
+
+    // ── Phase 9: Identity & Authentication ──
+    public DbSet<Tenant> IdentityTenants => Set<Tenant>();
+    public DbSet<User> IdentityUsers => Set<User>();
+    public DbSet<Role> IdentityRoles => Set<Role>();
+    public DbSet<UserRole> IdentityUserRoles => Set<UserRole>();
+    public DbSet<RefreshToken> IdentityRefreshTokens => Set<RefreshToken>();
+    public DbSet<UserSession> IdentityUserSessions => Set<UserSession>();
+    public DbSet<LoginAttempt> IdentityLoginAttempts => Set<LoginAttempt>();
+    public DbSet<EmailVerificationToken> IdentityEmailVerificationTokens => Set<EmailVerificationToken>();
+    public DbSet<PasswordResetToken> IdentityPasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<TwoFactorSecret> IdentityTwoFactorSecrets => Set<TwoFactorSecret>();
+    public DbSet<ImpersonationSession> IdentityImpersonationSessions => Set<ImpersonationSession>();
+    public DbSet<BackfillError> IdentityBackfillErrors => Set<BackfillError>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -600,6 +616,25 @@ public class MuallimiDbContext : DbContext
 
         ConfigurePhase6(modelBuilder);
         ApplyPhase6TenantFilters(modelBuilder);
+
+        modelBuilder.ConfigurePhase9Identity();
+        ApplyPhase9IdentityTenantFilters(modelBuilder);
+
+        // Phase 9 additive: nullable legacy-link FK columns on existing person entities.
+        modelBuilder.Entity<StudentProfile>()
+            .Property(x => x.UserId).HasColumnName("user_id");
+        modelBuilder.Entity<ParentProfile>()
+            .Property(x => x.UserId).HasColumnName("user_id");
+        modelBuilder.Entity<SchoolAdministrator>()
+            .Property(x => x.UserId).HasColumnName("user_id");
+        modelBuilder.Entity<Teacher>()
+            .Property(x => x.UserId).HasColumnName("user_id");
+    }
+
+    private void ApplyPhase9IdentityTenantFilters(ModelBuilder modelBuilder)
+    {
+        ApplyTenantFilter<User>(modelBuilder);
+        ApplyTenantFilter<UserRole>(modelBuilder);
     }
 
     private static void ConfigurePhase3(ModelBuilder modelBuilder)

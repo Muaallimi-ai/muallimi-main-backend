@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Muallimi.Api.Parents.ParentDashboard;
 using Muallimi.Api.Parents.ParentNotifications;
 using Muallimi.Api.Parents.ParentNotifications.Channels;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.Parents;
 using Muallimi.Infrastructure.Persistence;
 
@@ -110,11 +111,15 @@ internal sealed class TestChannelAdapter : INotificationChannelAdapter
         request.Metadata.TryGetValue("parent_notification_id", out var nidRaw);
         request.Metadata.TryGetValue("deep_link", out var deepLink);
         Guid.TryParse(nidRaw, out var parentNotificationId);
+        request.Metadata.TryGetValue("parent_profile_id", out var parentIdRaw);
+        request.Metadata.TryGetValue("child_id", out var childIdRaw);
+        var parentProfileId = Guid.TryParse(parentIdRaw, out var pid) ? pid : request.RecipientUserId;
+        var childId = Guid.TryParse(childIdRaw, out var cid) ? cid : Guid.Empty;
         _ledger.Record(new NotificationDispatchStubReceipt(
             ParentNotificationId: parentNotificationId,
             TenantId: request.TenantId,
-            ParentProfileId: request.ParentProfileId,
-            ChildId: request.ChildId,
+            ParentProfileId: parentProfileId,
+            ChildId: childId,
             Channel: Channel,
             Language: request.Language,
             Body: request.Body,

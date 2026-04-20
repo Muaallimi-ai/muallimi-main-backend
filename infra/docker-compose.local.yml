@@ -198,6 +198,20 @@ services:
       "
     restart: "no"
 
+  # ─── Email dev inbox (Mailpit) ──────────────────────────────────────
+  # Catches all SMTP traffic from the backend in dev. Identity transactional
+  # emails (verification, password reset, invitation) arrive here.
+  # SMTP on port 1025, web UI on http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: muallimi-mailpit
+    ports:
+      - "1025:1025"   # SMTP (backend sends here)
+      - "8025:8025"   # Web UI (open in browser to read emails)
+    environment:
+      MP_MAX_MESSAGES: 500
+    restart: unless-stopped
+
   # ─── Notification stubs (Phase 4 NotificationChannelAdapter) ────────
   # Each stub prints to stdout and writes a delivery receipt to a shared
   # volume so tests can assert on-disk evidence.

@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 
 namespace Muallimi.Api.Notifications.ProductionProviderBindings;
 

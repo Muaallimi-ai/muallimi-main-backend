@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.Parents;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Domain.StudentExperience;

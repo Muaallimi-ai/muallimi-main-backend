@@ -1,6 +1,7 @@
 using System;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Muallimi.Domain.Shared;
 using Muallimi.Infrastructure.Persistence;
 
 namespace Muallimi.Api.StudentExperience.Tenancy;

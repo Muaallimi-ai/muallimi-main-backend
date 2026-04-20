@@ -1,5 +1,5 @@
 using System;
-using Muallimi.Domain.StudentExperience;
+using Muallimi.Domain.Shared;
 
 namespace Muallimi.Domain.Parents;
 
@@ -17,6 +17,8 @@ public class ParentProfile : ITenantScoped
     public string ConsentState { get; set; } = "{}";
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    /// <summary>Phase 9 identity FK. Populated by the legacy backfill (US7). Null until linked.</summary>
+    public Guid? UserId { get; set; }
 }
 
 public class ChildLink : ITenantScoped

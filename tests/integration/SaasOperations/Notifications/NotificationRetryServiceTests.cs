@@ -4,6 +4,7 @@ using Muallimi.Api.DownstreamEvents;
 using Muallimi.Api.Notifications.DeliveryTracking;
 using Muallimi.Api.Notifications.RetryAndDeadLetter;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SaasOperations;
 using Xunit;
 

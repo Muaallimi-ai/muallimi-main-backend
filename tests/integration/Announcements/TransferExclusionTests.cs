@@ -56,7 +56,7 @@ public class TransferExclusionTests
 
         var deliveries = await deliveryRepo.ListForAnnouncementAsync(AnnouncementHarness.TenantAlpha, row.AnnouncementId);
         Assert.DoesNotContain(deliveries, d => d.RecipientId == harness.TransferredStudent);
-        Assert.DoesNotContain(channels.Dispatched, d => d.ChildId == harness.TransferredStudent);
+        Assert.DoesNotContain(channels.Dispatched, d => d.RecipientUserId == harness.TransferredStudent);
 
         // The dispatcher result reports the correct recipient count: 4
         // active students + 1 linked parent.

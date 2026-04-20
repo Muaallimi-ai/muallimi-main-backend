@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Muallimi.Api.Notifications.RetryAndDeadLetter;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Muallimi.Domain.SaasOperations;
 using Muallimi.Infrastructure.Persistence;
 
@@ -120,8 +121,8 @@ public sealed class NotificationDeliveryTracker : INotificationDeliveryTracker
             var adapter = _channels.Get(receipt.Channel);
             var request = new NotificationDispatchRequest(
                 TenantId: receipt.TenantId,
-                ParentProfileId: receipt.RecipientId,
-                ChildId: Guid.Empty,
+                RecipientUserId: receipt.RecipientId,
+                RecipientEmail: null,
                 NotificationKind: kind,
                 Language: language,
                 Title: title,

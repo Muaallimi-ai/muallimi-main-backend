@@ -4,5 +4,6 @@ obj/
 .vs/
 *.user
 .env
+.env.example
 appsettings.*.json
 !appsettings.Development.json

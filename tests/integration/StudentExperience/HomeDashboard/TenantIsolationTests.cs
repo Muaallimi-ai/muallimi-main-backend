@@ -5,6 +5,7 @@ using Muallimi.Api.StudentExperience.HomeDashboard;
 using Muallimi.Api.StudentExperience.PlanGating;
 using Muallimi.Api.StudentExperience.StudentSession;
 using Muallimi.Api.StudentExperience.Tenancy;
+using Muallimi.Domain.Shared;
 using Muallimi.Domain.StudentExperience;
 using Muallimi.Infrastructure.Persistence;
 using Xunit;

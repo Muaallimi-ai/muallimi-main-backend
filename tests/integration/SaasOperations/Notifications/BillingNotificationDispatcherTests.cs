@@ -4,6 +4,7 @@ using Muallimi.Api.Billing;
 using Muallimi.Api.Notifications.DeliveryTracking;
 using Muallimi.Api.Notifications.ProductionProviderBindings;
 using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 using Xunit;
 
 namespace Muallimi.Api.Tests.Integration.SaasOperations.Notifications;
@@ -76,7 +77,7 @@ public class BillingNotificationDispatcherTests
         public async Task<NotificationDispatchReceipt> DispatchAsync(NotificationDispatchRequest r, CancellationToken ct = default)
         {
             var id = await _sink.SendAsync(new WhatsAppMessage(
-                r.TenantId, r.ParentProfileId, r.NotificationKind, r.Language,
+                r.TenantId, r.RecipientUserId, r.NotificationKind, r.Language,
                 r.Title, r.Body, r.CorrelationId, r.Metadata), ct);
             return new NotificationDispatchReceipt(id, Channel);
         }

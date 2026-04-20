@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Muallimi.Domain.Shared;
 using Muallimi.Domain.StudentExperience;
 using Muallimi.Infrastructure.Persistence;
 

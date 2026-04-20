@@ -4,18 +4,20 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using Muallimi.Application.Notifications.Channels;
 
 namespace Muallimi.Api.Parents.ParentNotifications.Channels;
 
 /// <summary>
-/// T130 (US7) — Local in-app <see cref="INotificationChannelAdapter"/> stub.
+/// T130 (US7) — Local stub <see cref="INotificationChannelAdapter"/>
+/// implementations for <c>in_app</c>, <c>email</c>, and <c>push</c>.
 ///
-/// Writes delivery receipts to an in-memory log keyed by
-/// <c>parent_notification_id</c> so integration tests can assert round-trips
-/// without external infrastructure. A production implementation binds the
-/// same interface behind a web-socket / long-poll pipe — the dispatcher
-/// above never sees the difference (constitution "provider abstraction"
-/// rule).
+/// After Phase 9's notification generalization, <c>parent_profile_id</c>
+/// and <c>child_id</c> are read from
+/// <see cref="NotificationDispatchRequest.Metadata"/> rather than from
+/// dedicated request fields. The stub receipt keeps the parent-scoped
+/// shape because parent-flow integration tests assert against it — for
+/// non-parent flows these fields simply carry <see cref="Guid.Empty"/>.
 /// </summary>
 public interface INotificationChannelStubLedger
 {
@@ -75,13 +77,19 @@ internal abstract class LocalStubChannelAdapter : INotificationChannelAdapter
         var dispatchedAt = DateTime.UtcNow;
         request.Metadata.TryGetValue("parent_notification_id", out var nidRaw);
         request.Metadata.TryGetValue("deep_link", out var deepLink);
+        request.Metadata.TryGetValue("parent_profile_id", out var parentIdRaw);
+        request.Metadata.TryGetValue("child_id", out var childIdRaw);
         Guid.TryParse(nidRaw, out var parentNotificationId);
+        // Parent flows populate parent_profile_id in Metadata; for non-parent
+        // flows the recipient IS the effective parent-profile for audit purposes.
+        var parentProfileId = Guid.TryParse(parentIdRaw, out var pid) ? pid : request.RecipientUserId;
+        var childId = Guid.TryParse(childIdRaw, out var cid) ? cid : Guid.Empty;
 
         _ledger.Record(new NotificationDispatchStubReceipt(
             ParentNotificationId: parentNotificationId,
             TenantId: request.TenantId,
-            ParentProfileId: request.ParentProfileId,
-            ChildId: request.ChildId,
+            ParentProfileId: parentProfileId,
+            ChildId: childId,
             Channel: Channel,
             Language: request.Language,
             Body: request.Body,

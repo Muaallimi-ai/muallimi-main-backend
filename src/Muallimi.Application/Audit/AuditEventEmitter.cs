@@ -16,7 +16,7 @@ public class AuditEventEmitter
         _logger = logger;
     }
 
-    public void Emit(AuditEvent auditEvent)
+    public virtual void Emit(AuditEvent auditEvent)
     {
         _logger.LogInformation(
             "AUDIT: [{Category}] {Action} on {TargetType}/{TargetId} by {ActorId} in tenant {TenantId} => {Outcome} | CorrelationId={CorrelationId}",
@@ -43,4 +43,5 @@ public record AuditEvent
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public required string CorrelationId { get; init; }
     public string? Reason { get; init; }
+    public string? ImpersonationSessionId { get; init; }
 }

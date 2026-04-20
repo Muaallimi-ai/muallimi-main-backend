@@ -1,16 +1,7 @@
 using System;
+using Muallimi.Domain.Shared;
 
 namespace Muallimi.Domain.StudentExperience;
-
-/// <summary>
-/// Marker interface for every tenant-scoped Phase 3 entity. EF Core applies a
-/// global query filter on `TenantId` for anything implementing this interface
-/// (see Muallimi.Infrastructure TenantQueryFilter).
-/// </summary>
-public interface ITenantScoped
-{
-    Guid TenantId { get; set; }
-}
 
 public class StudentProfile : ITenantScoped
 {
@@ -27,6 +18,8 @@ public class StudentProfile : ITenantScoped
     public string ConsentState { get; set; } = "pending";
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    /// <summary>Phase 9 identity FK. Populated by the legacy backfill (US7). Null until linked.</summary>
+    public Guid? UserId { get; set; }
 }
 
 public class StudentSession : ITenantScoped

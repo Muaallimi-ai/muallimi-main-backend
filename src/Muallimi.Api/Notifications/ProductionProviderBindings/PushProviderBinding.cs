@@ -1,7 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using Muallimi.Api.Parents.ParentNotifications;
+using Muallimi.Application.Notifications.Channels;
 
 namespace Muallimi.Api.Notifications.ProductionProviderBindings;
 
@@ -33,7 +33,7 @@ public sealed class PushProviderBinding : INotificationChannelAdapter
     {
         var isArabic = string.Equals(request.Language, "ar", StringComparison.OrdinalIgnoreCase);
         var payload = new PushPayload(
-            Recipient: request.ParentProfileId.ToString("D"),
+            Recipient: request.RecipientUserId.ToString("D"),
             TenantId: request.TenantId,
             NotificationKind: request.NotificationKind,
             CorrelationId: request.CorrelationId,

@@ -71,6 +71,10 @@ services:
       Minio__CurriculumBucket: muallimi-curriculum-local
       Seq__Url: http://seq:5341
       AiService__BaseUrl: http://ai-service:5272
+      Mailpit__Enabled: "true"
+      Mailpit__SmtpHost: mailpit
+      Mailpit__SmtpPort: "1025"
+      Mailpit__FromAddress: noreply@muallimi.local
     depends_on:
       postgres:
         condition: service_healthy
