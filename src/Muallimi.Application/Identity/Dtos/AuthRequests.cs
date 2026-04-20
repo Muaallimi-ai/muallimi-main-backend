@@ -25,6 +25,9 @@ public sealed class RegisterRequest
     [JsonPropertyName("locale")]
     public string? Locale { get; set; }
 
+    [JsonPropertyName("phoneNumber")]
+    public string? PhoneNumber { get; set; }
+
     [JsonPropertyName("acceptedTerms")]
     public bool AcceptedTerms { get; set; }
 }

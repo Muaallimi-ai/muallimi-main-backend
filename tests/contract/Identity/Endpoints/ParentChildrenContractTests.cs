@@ -267,6 +267,181 @@ public class ParentChildrenContractTests
     }
 
     [Fact]
+    public async Task CreateChild_Persists_Grade_Birthday_Gender_To_StudentProfile()
+    {
+        using var h = await IdentityTestHarness.CreateAsync();
+        var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-profile@example.com");
+        var svc = BuildUserManagementService(h);
+
+        var birthday = new DateTime(2015, 3, 14);
+        var cmd = new CreateChildCommand(
+            ParentUserId: parentId,
+            ParentTenantId: parentTenantId,
+            FullName: "منى",
+            FullNameEn: null,
+            Grade: 6,
+            Gender: "female",
+            Birthday: birthday,
+            PreferredUsername: null,
+            CustomPassword: null,
+            PasswordLocale: "ar",
+            IpAddress: "127.0.0.1",
+            UserAgent: "xunit",
+            CorrelationId: Guid.NewGuid().ToString("D"));
+        var created = await svc.CreateChildAsync(cmd);
+        Assert.True(created.Success);
+        var childId = Guid.Parse(created.Payload!.UserId);
+
+        var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
+            .SingleAsync(p => p.UserId == childId);
+        Assert.Equal("6", profile.Grade);
+        Assert.Equal("female", profile.Gender);
+        Assert.Equal(DateOnly.FromDateTime(birthday), profile.Birthday);
+        Assert.Equal(parentTenantId, profile.TenantId);
+
+        // And the GET read-back projects the real values now, not defaults.
+        var detail = await svc.GetChildAsync(parentId, childId);
+        Assert.NotNull(detail);
+        Assert.Equal(6, detail!.Grade);
+        Assert.Equal("female", detail.Gender);
+        Assert.Equal(birthday.Date, detail.Birthday.Date);
+
+        var list = await svc.ListChildrenAsync(parentId, parentTenantId);
+        var listed = Assert.Single(list);
+        Assert.Equal(6, listed.Grade);
+        Assert.Equal("female", listed.Gender);
+    }
+
+    [Fact]
+    public async Task CreateChild_Accepts_KG2_Grade_Zero()
+    {
+        using var h = await IdentityTestHarness.CreateAsync();
+        var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-kg2@example.com");
+        var svc = BuildUserManagementService(h);
+
+        var cmd = new CreateChildCommand(
+            parentId, parentTenantId, "روضة", null,
+            Grade: 0, Gender: "male",
+            Birthday: new DateTime(2020, 5, 1),
+            null, null, "ar",
+            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D"));
+        var created = await svc.CreateChildAsync(cmd);
+        Assert.True(created.Success);
+        Assert.Equal(0, created.Payload!.Grade);
+
+        var childId = Guid.Parse(created.Payload.UserId);
+        var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
+            .SingleAsync(p => p.UserId == childId);
+        Assert.Equal("0", profile.Grade);
+    }
+
+    [Fact]
+    public async Task UpdateChild_Persists_Grade_Birthday_Gender_To_StudentProfile()
+    {
+        using var h = await IdentityTestHarness.CreateAsync();
+        var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-upd@example.com");
+        var svc = BuildUserManagementService(h);
+
+        var created = await svc.CreateChildAsync(NewCreateCmd(parentId, parentTenantId, "سلمى"));
+        var childId = Guid.Parse(created.Payload!.UserId);
+
+        var newBirthday = new DateTime(2014, 7, 20);
+        var update = await svc.UpdateChildAsync(new UpdateChildCommand(
+            parentId, parentTenantId, childId,
+            FullName: null, FullNameEn: null,
+            Grade: 8, Gender: "female", Birthday: newBirthday,
+            IpAddress: "127.0.0.1", UserAgent: null,
+            CorrelationId: Guid.NewGuid().ToString("D")));
+        Assert.True(update.Success);
+        Assert.Equal(8, update.Payload!.Grade);
+        Assert.Equal("female", update.Payload.Gender);
+        Assert.Equal(newBirthday.Date, update.Payload.Birthday.Date);
+
+        var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
+            .SingleAsync(p => p.UserId == childId);
+        Assert.Equal("8", profile.Grade);
+        Assert.Equal("female", profile.Gender);
+        Assert.Equal(DateOnly.FromDateTime(newBirthday), profile.Birthday);
+    }
+
+    [Fact]
+    public async Task UpdateChild_Null_Birthday_Does_Not_Clear_Persisted_Value()
+    {
+        using var h = await IdentityTestHarness.CreateAsync();
+        var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-nullbd@example.com");
+        var svc = BuildUserManagementService(h);
+
+        var birthday = new DateTime(2016, 2, 2);
+        var created = await svc.CreateChildAsync(new CreateChildCommand(
+            parentId, parentTenantId, "نادر", null,
+            Grade: 4, Gender: "male", Birthday: birthday,
+            null, null, "ar",
+            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var childId = Guid.Parse(created.Payload!.UserId);
+
+        // Patch the grade, leave birthday null (typical "edit just grade" flow).
+        var update = await svc.UpdateChildAsync(new UpdateChildCommand(
+            parentId, parentTenantId, childId,
+            FullName: null, FullNameEn: null,
+            Grade: 5, Gender: null, Birthday: null,
+            IpAddress: "127.0.0.1", UserAgent: null,
+            CorrelationId: Guid.NewGuid().ToString("D")));
+        Assert.True(update.Success);
+
+        var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
+            .SingleAsync(p => p.UserId == childId);
+        Assert.Equal("5", profile.Grade);
+        Assert.Equal(DateOnly.FromDateTime(birthday), profile.Birthday); // untouched
+    }
+
+    [Fact]
+    public async Task GetChild_Without_StudentProfile_Emits_Defaults()
+    {
+        // Legacy child created before the StudentProfile persistence fix.
+        using var h = await IdentityTestHarness.CreateAsync();
+        var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-legacy@example.com");
+        var svc = BuildUserManagementService(h);
+
+        // Seed a Managed child directly (bypass the service) to simulate
+        // a pre-fix legacy row with no StudentProfile.
+        var studentRole = await h.Db.IdentityRoles.IgnoreQueryFilters()
+            .SingleAsync(r => r.Name == "student");
+        var childId = Guid.NewGuid();
+        h.Db.IdentityUsers.Add(new Muallimi.Domain.Identity.Entities.User
+        {
+            Id = childId,
+            TenantId = parentTenantId,
+            AccountType = AccountType.Managed,
+            ManagedByUserId = parentId,
+            Username = "legacy.kid.001",
+            NormalizedUsername = "legacy.kid.001",
+            FullName = "طفل قديم",
+            Locale = "ar",
+            Status = UserStatus.Active,
+            PasswordHash = "$2a$12$fake",
+            PasswordChangedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = parentId,
+        });
+        h.Db.IdentityUserRoles.Add(new Muallimi.Domain.Identity.Entities.UserRole
+        {
+            Id = Guid.NewGuid(),
+            UserId = childId,
+            RoleId = studentRole.Id,
+            TenantId = parentTenantId,
+            GrantedBy = parentId,
+            GrantedAt = DateTime.UtcNow,
+        });
+        await h.Db.SaveChangesAsync();
+
+        var detail = await svc.GetChildAsync(parentId, childId);
+        Assert.NotNull(detail);
+        Assert.Equal(0, detail!.Grade);
+        Assert.Equal(string.Empty, detail.Gender);
+        Assert.Equal(DateTime.MinValue, detail.Birthday);
+    }
+
+    [Fact]
     public async Task CrossParent_Access_Returns_NotFound()
     {
         using var h = await IdentityTestHarness.CreateAsync();

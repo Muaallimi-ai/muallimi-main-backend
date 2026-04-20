@@ -23,6 +23,7 @@ public static class OperatorEndpoints
         // ── T100: Tenant Health ────────────────────────────────────────────
         routes.MapGet("/api/v1/operator/tenants", ListTenantsAsync);
         routes.MapGet("/api/v1/operator/tenants/{tenantId:guid}", GetTenantAsync);
+        routes.MapPost("/api/v1/operator/tenants/refresh", RefreshAllTenantsAsync);
 
         // ── T101: Feature Flags ────────────────────────────────────────────
         routes.MapGet("/api/v1/operator/tenants/{tenantId:guid}/feature-flags", ListFlagsAsync);
@@ -268,6 +269,18 @@ public static class OperatorEndpoints
             school_details = schoolDetails,
             computed_at = view.ComputedAt,
         });
+    }
+
+    private static async Task<IResult> RefreshAllTenantsAsync(
+        HttpContext http,
+        MuallimiDbContext db,
+        TenantHealthRollupService rollup,
+        CancellationToken ct)
+    {
+        if (!AiOperationsEndpoints.TryEnsureOperator(http, out _, out var forbid)) return forbid!;
+        await rollup.RefreshAllAsync(ct);
+        var count = await db.TenantHealthViews.AsNoTracking().CountAsync(ct);
+        return Results.Ok(new { tenant_count = count, refreshed_at = DateTime.UtcNow });
     }
 
     // ── T101 handlers ──────────────────────────────────────────────────────

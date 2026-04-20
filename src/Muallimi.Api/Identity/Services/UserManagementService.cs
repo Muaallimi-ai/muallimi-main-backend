@@ -12,6 +12,7 @@ using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
+using Muallimi.Domain.StudentExperience;
 using Muallimi.Infrastructure.Persistence;
 
 namespace Muallimi.Api.Identity.Services;
@@ -170,17 +171,28 @@ public sealed class UserManagementService : IUserManagementService
         _db.IdentityUsers.Add(child);
         _db.IdentityUserRoles.Add(grant);
 
-        // Grade/gender/birthday live on the Family-scoped profile; we
-        // stash them in a lightweight metadata row so US5 (student
-        // profile) can surface them without introducing a new entity
-        // just for US2. The key is child-scoped; the value is JSON.
-        // (Intentionally using the existing UpdatedAt audit trail on
-        // User — no extra entity churn for US2.)
-        // NOTE: We persist grade/gender/birthday in the User.Locale-
-        // adjacent FullName field for now would be wrong, so we keep
-        // them in-memory for the response only. Persistence of these
-        // attributes is tracked by US5 (student profile). The audit
-        // event records them verbatim.
+        // Persist grade/gender/birthday on the family-scoped StudentProfile
+        // row so subsequent reads (list/detail) project from the same
+        // source of truth the frontend dialog seeds from.
+        var now = DateTime.UtcNow;
+        var profile = new StudentProfile
+        {
+            Id = Guid.NewGuid(),
+            TenantId = parent.TenantId,
+            UserId = child.Id,
+            DisplayName = child.FullName,
+            CurriculumType = "MOE-EG",
+            Grade = cmd.Grade.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            PreferredLanguage = child.Locale,
+            PlanTier = "free",
+            SubjectsEnrolled = "[]",
+            ConsentState = "pending",
+            Birthday = cmd.Birthday == default ? null : DateOnly.FromDateTime(cmd.Birthday),
+            Gender = string.IsNullOrWhiteSpace(cmd.Gender) ? null : cmd.Gender,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.StudentProfiles.Add(profile);
 
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
@@ -240,17 +252,31 @@ public sealed class UserManagementService : IUserManagementService
             .OrderBy(u => u.CreatedAt)
             .ToListAsync(ct).ConfigureAwait(false);
 
-        return children.Select(u => new ChildSummary
+        if (children.Count == 0) return Array.Empty<ChildSummary>();
+
+        var childIds = children.Select(c => c.Id).ToList();
+        var profiles = await _db.StudentProfiles.IgnoreQueryFilters()
+            .Where(p => p.UserId != null && childIds.Contains(p.UserId!.Value))
+            .ToListAsync(ct).ConfigureAwait(false);
+        var profileByUserId = profiles
+            .GroupBy(p => p.UserId!.Value)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        return children.Select(u =>
         {
-            UserId = u.Id.ToString("D"),
-            Username = u.Username ?? string.Empty,
-            FullName = u.FullName,
-            FullNameEn = u.FullNameEn,
-            Grade = 0,
-            Gender = string.Empty,
-            Status = u.Status.ToString().ToLowerInvariant(),
-            LastLoginAt = u.LastLoginAt,
-            CreatedAt = u.CreatedAt,
+            profileByUserId.TryGetValue(u.Id, out var p);
+            return new ChildSummary
+            {
+                UserId = u.Id.ToString("D"),
+                Username = u.Username ?? string.Empty,
+                FullName = u.FullName,
+                FullNameEn = u.FullNameEn,
+                Grade = ParseGrade(p?.Grade),
+                Gender = p?.Gender ?? string.Empty,
+                Status = u.Status.ToString().ToLowerInvariant(),
+                LastLoginAt = u.LastLoginAt,
+                CreatedAt = u.CreatedAt,
+            };
         }).ToList();
     }
 
@@ -262,23 +288,9 @@ public sealed class UserManagementService : IUserManagementService
                 && u.AccountType == AccountType.Managed
                 && u.Status != UserStatus.Archived, ct).ConfigureAwait(false);
         if (child is null) return null;
-        return new ChildDetail
-        {
-            UserId = child.Id.ToString("D"),
-            Username = child.Username ?? string.Empty,
-            FullName = child.FullName,
-            FullNameEn = child.FullNameEn,
-            Grade = 0,
-            Gender = string.Empty,
-            Birthday = DateTime.MinValue,
-            Status = child.Status.ToString().ToLowerInvariant(),
-            Locale = child.Locale,
-            LastLoginAt = child.LastLoginAt,
-            TenantId = child.TenantId.ToString("D"),
-            ManagedByUserId = child.ManagedByUserId?.ToString("D") ?? string.Empty,
-            CreatedAt = child.CreatedAt,
-            UpdatedAt = child.UpdatedAt,
-        };
+        var profile = await _db.StudentProfiles.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.UserId == childUserId, ct).ConfigureAwait(false);
+        return BuildChildDetail(child, profile);
     }
 
     public async Task<ChildOperationResult<ChildDetail>> UpdateChildAsync(UpdateChildCommand cmd, CancellationToken ct = default)
@@ -306,6 +318,52 @@ public sealed class UserManagementService : IUserManagementService
         }
         child.UpdatedAt = DateTime.UtcNow;
 
+        // Patch-style update of the StudentProfile; only persist fields
+        // the caller actually supplied. Create a row on demand for legacy
+        // children created before StudentProfile persistence existed.
+        var profile = await _db.StudentProfiles.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.UserId == cmd.ChildUserId, ct).ConfigureAwait(false);
+        var now = DateTime.UtcNow;
+        if (profile is null)
+        {
+            profile = new StudentProfile
+            {
+                Id = Guid.NewGuid(),
+                TenantId = child.TenantId,
+                UserId = child.Id,
+                DisplayName = child.FullName,
+                CurriculumType = "MOE-EG",
+                Grade = cmd.Grade.HasValue
+                    ? cmd.Grade.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : string.Empty,
+                PreferredLanguage = child.Locale,
+                PlanTier = "free",
+                SubjectsEnrolled = "[]",
+                ConsentState = "pending",
+                Birthday = (cmd.Birthday.HasValue && cmd.Birthday.Value != default)
+                    ? DateOnly.FromDateTime(cmd.Birthday.Value)
+                    : null,
+                Gender = string.IsNullOrWhiteSpace(cmd.Gender) ? null : cmd.Gender,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.StudentProfiles.Add(profile);
+        }
+        else
+        {
+            if (cmd.Grade.HasValue)
+                profile.Grade = cmd.Grade.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(cmd.Gender))
+                profile.Gender = cmd.Gender;
+            // Only touch birthday if caller passed a real value (not the
+            // DateTime.MinValue sentinel produced by legacy bogus rows).
+            if (cmd.Birthday.HasValue && cmd.Birthday.Value != default)
+                profile.Birthday = DateOnly.FromDateTime(cmd.Birthday.Value);
+            if (!string.IsNullOrWhiteSpace(cmd.FullName))
+                profile.DisplayName = child.FullName;
+            profile.UpdatedAt = now;
+        }
+
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
@@ -321,23 +379,7 @@ public sealed class UserManagementService : IUserManagementService
             Reason = BuildChildMetadata(cmd.Grade, cmd.Gender, cmd.Birthday),
         });
 
-        return ChildOperationResult<ChildDetail>.Ok(new ChildDetail
-        {
-            UserId = child.Id.ToString("D"),
-            Username = child.Username ?? string.Empty,
-            FullName = child.FullName,
-            FullNameEn = child.FullNameEn,
-            Grade = 0,
-            Gender = string.Empty,
-            Birthday = DateTime.MinValue,
-            Status = child.Status.ToString().ToLowerInvariant(),
-            Locale = child.Locale,
-            LastLoginAt = child.LastLoginAt,
-            TenantId = child.TenantId.ToString("D"),
-            ManagedByUserId = child.ManagedByUserId?.ToString("D") ?? string.Empty,
-            CreatedAt = child.CreatedAt,
-            UpdatedAt = child.UpdatedAt,
-        }, "تم تحديث بيانات الطفل.");
+        return ChildOperationResult<ChildDetail>.Ok(BuildChildDetail(child, profile), "تم تحديث بيانات الطفل.");
     }
 
     public async Task<ChildOperationResult<ChildCredentialsOnce>> RegenerateChildPasswordAsync(RegenerateChildPasswordCommand cmd, CancellationToken ct = default)
@@ -595,6 +637,34 @@ public sealed class UserManagementService : IUserManagementService
                 && u.ManagedByUserId == parentUserId
                 && u.AccountType == AccountType.Managed, ct)
             .ConfigureAwait(false);
+
+    private static ChildDetail BuildChildDetail(User child, StudentProfile? profile)
+        => new()
+        {
+            UserId = child.Id.ToString("D"),
+            Username = child.Username ?? string.Empty,
+            FullName = child.FullName,
+            FullNameEn = child.FullNameEn,
+            Grade = ParseGrade(profile?.Grade),
+            Gender = profile?.Gender ?? string.Empty,
+            Birthday = profile?.Birthday is { } d ? d.ToDateTime(TimeOnly.MinValue) : DateTime.MinValue,
+            Status = child.Status.ToString().ToLowerInvariant(),
+            Locale = child.Locale,
+            LastLoginAt = child.LastLoginAt,
+            TenantId = child.TenantId.ToString("D"),
+            ManagedByUserId = child.ManagedByUserId?.ToString("D") ?? string.Empty,
+            CreatedAt = child.CreatedAt,
+            UpdatedAt = child.UpdatedAt,
+        };
+
+    private static int ParseGrade(string? grade)
+    {
+        if (string.IsNullOrWhiteSpace(grade)) return 0;
+        return int.TryParse(grade, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var g)
+            ? g
+            : 0;
+    }
 
     private static string BuildChildMetadata(int? grade, string? gender, DateTime? birthday)
     {

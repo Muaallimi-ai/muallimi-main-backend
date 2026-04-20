@@ -656,6 +656,8 @@ public class MuallimiDbContext : DbContext
             e.Property(x => x.ConsentState).HasColumnName("consent_state");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.Property(x => x.Birthday).HasColumnName("birthday").HasColumnType("date");
+            e.Property(x => x.Gender).HasColumnName("gender").HasMaxLength(10);
             e.HasIndex(x => x.TenantId);
         });
 

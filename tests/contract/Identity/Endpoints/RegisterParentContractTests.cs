@@ -93,7 +93,8 @@ public class RegisterParentContractTests
             AcceptedTerms: true,
             IpAddress: "127.0.0.1",
             UserAgent: "xunit-test",
-            CorrelationId: Guid.NewGuid().ToString("D"));
+            CorrelationId: Guid.NewGuid().ToString("D"),
+            PhoneNumber: "01001234567");
 
         var validator = new RegisterParentCommandValidator(new ZxcvbnPasswordStrengthValidator());
         Assert.Empty(validator.Validate(cmd));

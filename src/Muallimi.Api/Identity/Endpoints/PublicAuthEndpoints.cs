@@ -60,7 +60,8 @@ public static class PublicAuthEndpoints
             AcceptedTerms: request.AcceptedTerms,
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            PhoneNumber: request.PhoneNumber ?? string.Empty);
         var errors = validator.Validate(cmd);
         if (errors.Count > 0)
         {
@@ -88,7 +89,8 @@ public static class PublicAuthEndpoints
             AcceptedTerms: request.AcceptedTerms,
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            PhoneNumber: request.PhoneNumber ?? string.Empty);
         var errors = validator.Validate(cmd);
         if (errors.Count > 0)
         {
@@ -294,6 +296,9 @@ public sealed class SchoolAdminRegisterRequest
 
     [System.Text.Json.Serialization.JsonPropertyName("schoolDisplayName")]
     public string SchoolDisplayName { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("phoneNumber")]
+    public string? PhoneNumber { get; set; }
 
     [System.Text.Json.Serialization.JsonPropertyName("acceptedTerms")]
     public bool AcceptedTerms { get; set; }

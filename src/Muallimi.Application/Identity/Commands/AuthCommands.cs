@@ -25,7 +25,8 @@ public sealed record RegisterParentCommand(
     bool AcceptedTerms,
     string IpAddress,
     string? UserAgent,
-    string CorrelationId);
+    string CorrelationId,
+    string PhoneNumber = "");
 
 public sealed record RegisterSchoolAdminCommand(
     string Email,
@@ -37,7 +38,8 @@ public sealed record RegisterSchoolAdminCommand(
     bool AcceptedTerms,
     string IpAddress,
     string? UserAgent,
-    string CorrelationId);
+    string CorrelationId,
+    string PhoneNumber = "");
 
 public sealed record LoginCommand(
     string Identifier,

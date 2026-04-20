@@ -18,7 +18,7 @@ public interface ICommandValidator<in T>
     IReadOnlyList<ApiResponseError> Validate(T command);
 }
 
-internal static class ValidationRules
+public static class ValidationRules
 {
     // Keep permissive but sane — matches zxcvbn's own hint bar.
     public const int MinPasswordLength = 8;
@@ -30,6 +30,15 @@ internal static class ValidationRules
         @"^[^@\s]+@[^@\s]+\.[^@\s]+$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// Egyptian mobile: optional +20 or leading 0, then 1 + [0|1|2|5] +
+    /// 8 digits. Mirrors the frontend <c>phone</c> validator in
+    /// <c>src/lib/auth/validators.ts</c>.
+    /// </summary>
+    public static readonly Regex EgyptianPhoneRegex = new(
+        @"^(?:\+20|0)?1[0-25][0-9]{8}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public static bool IsValidEmail(string? email)
         => !string.IsNullOrWhiteSpace(email)
            && email.Length <= MaxEmailLength
@@ -37,6 +46,56 @@ internal static class ValidationRules
 
     public static bool IsValidLocale(string? locale)
         => locale is "ar" or "en";
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="phone"/> (after stripping
+    /// spaces) matches <see cref="EgyptianPhoneRegex"/>.
+    /// </summary>
+    public static bool IsValidPhone(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return false;
+        var stripped = StripWhitespace(phone);
+        return EgyptianPhoneRegex.IsMatch(stripped);
+    }
+
+    /// <summary>
+    /// Normalizes an Egyptian mobile number to its 10-digit core
+    /// beginning with <c>1</c>. Strips any leading <c>+20</c>, leading
+    /// <c>0</c>, and whitespace. Returns <c>null</c> if the phone is
+    /// null/empty or does not match the Egyptian mobile regex.
+    /// </summary>
+    public static string? NormalizePhone(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return null;
+        var stripped = StripWhitespace(phone);
+        if (!EgyptianPhoneRegex.IsMatch(stripped)) return null;
+        if (stripped.StartsWith("+20", StringComparison.Ordinal))
+        {
+            stripped = stripped.Substring(3);
+        }
+        if (stripped.StartsWith("0", StringComparison.Ordinal))
+        {
+            stripped = stripped.Substring(1);
+        }
+        return stripped;
+    }
+
+    private static string StripWhitespace(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+        System.Text.StringBuilder? sb = null;
+        for (int i = 0; i < input.Length; i++)
+        {
+            var c = input[i];
+            if (char.IsWhiteSpace(c))
+            {
+                sb ??= new System.Text.StringBuilder(input.Length).Append(input, 0, i);
+                continue;
+            }
+            sb?.Append(c);
+        }
+        return sb?.ToString() ?? input;
+    }
 }
 
 public sealed class RegisterParentCommandValidator : ICommandValidator<RegisterParentCommand>
@@ -76,6 +135,11 @@ public sealed class RegisterParentCommandValidator : ICommandValidator<RegisterP
         if (!ValidationRules.IsValidLocale(c.Locale))
             errors.Add(new ApiResponseError { Code = "locale_invalid", Field = "locale", Message = "اللغة غير مدعومة." });
 
+        if (string.IsNullOrWhiteSpace(c.PhoneNumber))
+            errors.Add(new ApiResponseError { Code = "phone_required", Field = "phoneNumber", Message = "رقم الهاتف مطلوب." });
+        else if (!ValidationRules.IsValidPhone(c.PhoneNumber))
+            errors.Add(new ApiResponseError { Code = "phone_invalid", Field = "phoneNumber", Message = "رقم الهاتف غير صالح." });
+
         if (!c.AcceptedTerms)
             errors.Add(new ApiResponseError { Code = "terms_not_accepted", Field = "acceptedTerms", Message = "يجب الموافقة على الشروط." });
 
@@ -111,6 +175,10 @@ public sealed class RegisterSchoolAdminCommandValidator : ICommandValidator<Regi
             errors.Add(new ApiResponseError { Code = "school_name_required", Field = "schoolDisplayName", Message = "اسم المدرسة مطلوب." });
         if (!ValidationRules.IsValidLocale(c.Locale))
             errors.Add(new ApiResponseError { Code = "locale_invalid", Field = "locale", Message = "اللغة غير مدعومة." });
+        if (string.IsNullOrWhiteSpace(c.PhoneNumber))
+            errors.Add(new ApiResponseError { Code = "phone_required", Field = "phoneNumber", Message = "رقم الهاتف مطلوب." });
+        else if (!ValidationRules.IsValidPhone(c.PhoneNumber))
+            errors.Add(new ApiResponseError { Code = "phone_invalid", Field = "phoneNumber", Message = "رقم الهاتف غير صالح." });
         if (!c.AcceptedTerms)
             errors.Add(new ApiResponseError { Code = "terms_not_accepted", Field = "acceptedTerms", Message = "يجب الموافقة على الشروط." });
         return errors;

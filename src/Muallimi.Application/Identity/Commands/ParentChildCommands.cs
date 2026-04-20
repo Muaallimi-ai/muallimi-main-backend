@@ -67,7 +67,8 @@ public sealed class CreateChildCommandValidator : ICommandValidator<CreateChildC
         else if (c.FullName.Length > ValidationRules.MaxFullNameLength)
             errors.Add(new ApiResponseError { Code = "full_name_length", Field = "fullName", Message = "الاسم طويل جدًا." });
 
-        if (c.Grade is < 1 or > 12)
+        // Accept KG1 (-1), KG2 (0), and Grades 1..12 inclusive.
+        if (c.Grade is < -1 or > 12)
             errors.Add(new ApiResponseError { Code = "grade_invalid", Field = "grade", Message = "الصف الدراسي غير صالح." });
 
         if (c.Gender is not ("male" or "female"))
@@ -117,14 +118,18 @@ public sealed class UpdateChildCommandValidator : ICommandValidator<UpdateChildC
         if (c.FullName is { } fn && fn.Length > ValidationRules.MaxFullNameLength)
             errors.Add(new ApiResponseError { Code = "full_name_length", Field = "fullName", Message = "الاسم طويل جدًا." });
 
-        if (c.Grade is { } g && (g < 1 || g > 12))
+        // Accept KG1 (-1), KG2 (0), and Grades 1..12 inclusive.
+        if (c.Grade is { } g && (g < -1 || g > 12))
             errors.Add(new ApiResponseError { Code = "grade_invalid", Field = "grade", Message = "الصف الدراسي غير صالح." });
 
         if (c.Gender is not null && c.Gender is not ("male" or "female"))
             errors.Add(new ApiResponseError { Code = "gender_invalid", Field = "gender", Message = "الجنس غير صالح." });
 
+        // A null birthday, or the sentinel DateTime.MinValue, means "don't
+        // change" — skip the range check. Only a genuine value is scrutinised.
         var today = DateTime.UtcNow.Date;
-        if (c.Birthday is { } bd && (bd.Date >= today || bd.Year < today.Year - 25))
+        if (c.Birthday is { } bd && bd != default
+            && (bd.Date >= today || bd.Year < today.Year - 25))
             errors.Add(new ApiResponseError { Code = "birthday_invalid", Field = "birthday", Message = "تاريخ الميلاد غير صالح." });
 
         return errors;

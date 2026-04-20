@@ -37,6 +37,21 @@ public interface IAuthService
     Task<AuthOutcome> LoginAsync(LoginCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> RefreshAsync(RefreshTokenCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> LogoutAsync(LogoutCommand cmd, CancellationToken ct = default);
+
+    /// <summary>
+    /// Runs the post-password-verification login pipeline for an
+    /// already-looked-up user: status checks, session creation, JWT +
+    /// refresh minting, audit event. Used by the child-PIN login path
+    /// (phone + PIN) which resolves the user via a different lookup
+    /// than <see cref="LoginAsync"/>'s identifier-based one. Callers
+    /// MUST have already verified the password.
+    /// </summary>
+    Task<AuthOutcome> CompleteLoginAsync(
+        User user,
+        string ipAddress,
+        string? userAgent,
+        string correlationId,
+        CancellationToken ct = default);
 }
 
 public sealed record AuthOutcome(
@@ -126,6 +141,17 @@ public sealed class AuthService : IAuthService
             return AuthOutcome.Fail(409, "email_taken", "البريد الإلكتروني مستخدم بالفعل.");
         }
 
+        var normalizedPhone = Muallimi.Application.Identity.Commands.ValidationRules.NormalizePhone(cmd.PhoneNumber);
+        if (!string.IsNullOrEmpty(normalizedPhone))
+        {
+            var phoneTaken = await _db.IdentityUsers.IgnoreQueryFilters()
+                .AnyAsync(u => u.PhoneNumber == normalizedPhone, ct).ConfigureAwait(false);
+            if (phoneTaken)
+            {
+                return AuthOutcome.Fail(409, "phone_taken", "رقم الهاتف مستخدم مسبقًا.");
+            }
+        }
+
         var tenant = new Tenant
         {
             Id = Guid.NewGuid(),
@@ -150,6 +176,7 @@ public sealed class AuthService : IAuthService
             Status = UserStatus.PendingEmailVerification,
             PasswordHash = _passwords.Hash(cmd.Password),
             PasswordChangedAt = DateTime.UtcNow,
+            PhoneNumber = normalizedPhone,
             CreatedAt = DateTime.UtcNow,
         };
         user.AssertAccountTypeInvariants();
@@ -209,6 +236,17 @@ public sealed class AuthService : IAuthService
             return AuthOutcome.Fail(409, "email_taken", "البريد الإلكتروني مستخدم بالفعل.");
         }
 
+        var normalizedPhone = Muallimi.Application.Identity.Commands.ValidationRules.NormalizePhone(cmd.PhoneNumber);
+        if (!string.IsNullOrEmpty(normalizedPhone))
+        {
+            var phoneTaken = await _db.IdentityUsers.IgnoreQueryFilters()
+                .AnyAsync(u => u.PhoneNumber == normalizedPhone, ct).ConfigureAwait(false);
+            if (phoneTaken)
+            {
+                return AuthOutcome.Fail(409, "phone_taken", "رقم الهاتف مستخدم مسبقًا.");
+            }
+        }
+
         var tenant = new Tenant
         {
             Id = Guid.NewGuid(),
@@ -232,6 +270,7 @@ public sealed class AuthService : IAuthService
             Status = UserStatus.PendingEmailVerification,
             PasswordHash = _passwords.Hash(cmd.Password),
             PasswordChangedAt = DateTime.UtcNow,
+            PhoneNumber = normalizedPhone,
             CreatedAt = DateTime.UtcNow,
         };
         user.AssertAccountTypeInvariants();
@@ -352,8 +391,28 @@ public sealed class AuthService : IAuthService
             }
         }
 
+        return await CompleteLoginAsync(user, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId, ct)
+            .ConfigureAwait(false);
+    }
+
+    // ── Shared post-auth login completion ──────────────────────────────
+
+    /// <summary>
+    /// Runs session+token minting, audit, and unusual-login detection
+    /// for an already-authenticated user. Called by <see cref="LoginAsync"/>
+    /// after password verification, and by the child-PIN endpoint after
+    /// PIN verification. Does NOT perform status/2FA/lockout guards —
+    /// the caller is expected to have checked those.
+    /// </summary>
+    public async Task<AuthOutcome> CompleteLoginAsync(
+        User user,
+        string ipAddress,
+        string? userAgent,
+        string correlationId,
+        CancellationToken ct = default)
+    {
         // Credentials OK + user admissible — mark a successful login.
-        user.MarkSuccessfulLogin(cmd.IpAddress);
+        user.MarkSuccessfulLogin(ipAddress);
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
         await _rateLimit.ClearLockoutAsync(user.Id.ToString("D"), ct).ConfigureAwait(false);
 
@@ -363,9 +422,9 @@ public sealed class AuthService : IAuthService
 
         var session = await _sessions.CreateAsync(new CreateSessionInput(
             UserId: user.Id,
-            IpAddress: cmd.IpAddress,
-            UserAgent: cmd.UserAgent,
-            DeviceName: InferDeviceName(cmd.UserAgent),
+            IpAddress: ipAddress,
+            UserAgent: userAgent,
+            DeviceName: InferDeviceName(userAgent),
             DeviceType: DeviceType.Unknown), ct).ConfigureAwait(false);
 
         var access = _tokens.GenerateAccessToken(user, tenant.Type, roleNames, session.Id);
@@ -378,7 +437,7 @@ public sealed class AuthService : IAuthService
             TokenHash = refresh.hash,
             IssuedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.Add(RefreshTokenLifetime),
-            CreatedByIp = cmd.IpAddress,
+            CreatedByIp = ipAddress,
         });
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
@@ -391,7 +450,7 @@ public sealed class AuthService : IAuthService
             TargetType = "User",
             TargetId = user.Id.ToString("D"),
             Outcome = "succeeded",
-            CorrelationId = cmd.CorrelationId,
+            CorrelationId = correlationId,
         });
 
         // T148 — Unusual-login detection and notification.
@@ -400,13 +459,13 @@ public sealed class AuthService : IAuthService
             try
             {
                 var isUnusual = await _unusualLoginDetector.RecordAndDetectAsync(
-                    user.Id, cmd.IpAddress, cmd.UserAgent, ct).ConfigureAwait(false);
+                    user.Id, ipAddress, userAgent, ct).ConfigureAwait(false);
                 await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
                 if (isUnusual)
                 {
-                    var deviceSummary = InferDeviceName(cmd.UserAgent) ?? cmd.UserAgent ?? "unknown";
-                    var location = cmd.IpAddress;
+                    var deviceSummary = InferDeviceName(userAgent) ?? userAgent ?? "unknown";
+                    var location = ipAddress;
 
                     if (user.AccountType == AccountType.Personal)
                     {
@@ -414,7 +473,7 @@ public sealed class AuthService : IAuthService
                         _ = _notifications.SendUnusualLoginAsync(
                             new IdentityNotificationRecipient(
                                 user.TenantId, user.Id, user.Email, user.FullName, user.Locale),
-                            deviceSummary, location, cmd.CorrelationId, ct);
+                            deviceSummary, location, correlationId, ct);
                     }
                     else if (user.AccountType == AccountType.Managed && user.ManagedByUserId.HasValue)
                     {
@@ -427,7 +486,7 @@ public sealed class AuthService : IAuthService
                             _ = _notifications.SendChildUnusualLoginAsync(
                                 new IdentityNotificationRecipient(
                                     parent.TenantId, parent.Id, parent.Email, parent.FullName, parent.Locale),
-                                user.FullName, deviceSummary, location, cmd.CorrelationId, ct);
+                                user.FullName, deviceSummary, location, correlationId, ct);
                         }
                     }
                 }
@@ -579,6 +638,14 @@ public sealed class AuthService : IAuthService
             var normalized = NormalizeEmail(identifier);
             return await _db.IdentityUsers.IgnoreQueryFilters()
                 .FirstOrDefaultAsync(u => u.NormalizedEmail == normalized, ct).ConfigureAwait(false);
+        }
+        // Phone-as-identifier: accept Egyptian mobile (+20/0 prefix or
+        // bare 10-digit core) and normalize to the 10-digit canonical form.
+        var normalizedPhone = Muallimi.Application.Identity.Commands.ValidationRules.NormalizePhone(identifier);
+        if (!string.IsNullOrEmpty(normalizedPhone))
+        {
+            return await _db.IdentityUsers.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone, ct).ConfigureAwait(false);
         }
         var normalizedUsername = identifier.ToLowerInvariant();
         return await _db.IdentityUsers.IgnoreQueryFilters()

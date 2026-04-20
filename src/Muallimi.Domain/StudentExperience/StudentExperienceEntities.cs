@@ -20,6 +20,10 @@ public class StudentProfile : ITenantScoped
     public DateTime UpdatedAt { get; set; }
     /// <summary>Phase 9 identity FK. Populated by the legacy backfill (US7). Null until linked.</summary>
     public Guid? UserId { get; set; }
+    /// <summary>Child date-of-birth (Phase 9 parent-children flow). Nullable for legacy rows.</summary>
+    public DateOnly? Birthday { get; set; }
+    /// <summary>Child gender: "male", "female", or null (Phase 9 parent-children flow).</summary>
+    public string? Gender { get; set; }
 }
 
 public class StudentSession : ITenantScoped
