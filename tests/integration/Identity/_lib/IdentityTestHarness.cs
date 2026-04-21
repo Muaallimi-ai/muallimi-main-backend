@@ -119,9 +119,15 @@ public sealed class IdentityTestHarness : IDisposable
             db, passwords, twoFactorService, aes, audit.Emitter,
             NullLogger<TwoFactorManagementService>.Instance);
 
+        var profileIds = new Muallimi.Application.Identity.Services.ProfileIdsResolver(
+            new Muallimi.Application.Identity.Services.IProfileIdContributor[]
+            {
+                new Muallimi.Api.Identity.Services.StudentProfileIdContributor(db),
+            });
+
         var auth = new AuthService(
             db, passwords, tokens, rateLimit, sessions, audit.Emitter,
-            notifications, verification, linkBuilder,
+            notifications, verification, linkBuilder, profileIds,
             NullLogger<AuthService>.Instance,
             twoFactorMgmt);
 
@@ -131,7 +137,8 @@ public sealed class IdentityTestHarness : IDisposable
             resetLinkBuilder, NullLogger<PasswordResetService>.Instance);
 
         var impersonation = new Muallimi.Api.Identity.Services.ImpersonationService(
-            db, tokens, audit.Emitter, NullLogger<Muallimi.Api.Identity.Services.ImpersonationService>.Instance);
+            db, tokens, audit.Emitter, profileIds,
+            NullLogger<Muallimi.Api.Identity.Services.ImpersonationService>.Instance);
 
         return new IdentityTestHarness(db, auth, verification, tokens, passwords, sessions,
             notifications, audit, pwReset, twoFactorMgmt, impersonation);

@@ -160,6 +160,10 @@ services:
       NEXT_PUBLIC_CURRICULUM_API_URL: http://localhost:5063
       NEXT_PUBLIC_AI_TUTOR_API_URL: http://localhost:5063
       NEXT_PUBLIC_ANALYTICS_API_URL: http://localhost:5063
+      # Server-side rewrite target (used by next.config.js rewrites()).
+      # Uses the internal Docker service DNS so the Next.js server can
+      # reach the backend without going through the host-published port.
+      BACKEND_INTERNAL_URL: http://main-backend:5063
     depends_on:
       main-backend:
         condition: service_healthy

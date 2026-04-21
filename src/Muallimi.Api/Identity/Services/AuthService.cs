@@ -93,6 +93,7 @@ public sealed class AuthService : IAuthService
     private readonly IVerificationLinkBuilder _linkBuilder;
     private readonly ITwoFactorManagementService? _twoFactor;
     private readonly IUnusualLoginDetector? _unusualLoginDetector;
+    private readonly IProfileIdsResolver _profileIds;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -105,6 +106,7 @@ public sealed class AuthService : IAuthService
         IIdentityNotificationSender notifications,
         IEmailVerificationService verification,
         IVerificationLinkBuilder linkBuilder,
+        IProfileIdsResolver profileIds,
         ILogger<AuthService> logger,
         ITwoFactorManagementService? twoFactor = null,
         IUnusualLoginDetector? unusualLoginDetector = null)
@@ -118,6 +120,7 @@ public sealed class AuthService : IAuthService
         _notifications = notifications;
         _verification = verification;
         _linkBuilder = linkBuilder;
+        _profileIds = profileIds;
         _twoFactor = twoFactor;
         _unusualLoginDetector = unusualLoginDetector;
         _logger = logger;
@@ -427,7 +430,8 @@ public sealed class AuthService : IAuthService
             DeviceName: InferDeviceName(userAgent),
             DeviceType: DeviceType.Unknown), ct).ConfigureAwait(false);
 
-        var access = _tokens.GenerateAccessToken(user, tenant.Type, roleNames, session.Id);
+        var profileIds = await _profileIds.ResolveAsync(user.Id, user.TenantId, ct).ConfigureAwait(false);
+        var access = _tokens.GenerateAccessToken(user, tenant.Type, roleNames, session.Id, profileIds: profileIds);
         var refresh = _tokens.GenerateRefreshToken();
         _db.IdentityRefreshTokens.Add(new RefreshToken
         {
@@ -572,7 +576,8 @@ public sealed class AuthService : IAuthService
 
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
-        var access = _tokens.GenerateAccessToken(user, tenant.Type, roles, token.SessionId);
+        var profileIds = await _profileIds.ResolveAsync(user.Id, user.TenantId, ct).ConfigureAwait(false);
+        var access = _tokens.GenerateAccessToken(user, tenant.Type, roles, token.SessionId, profileIds: profileIds);
 
         _audit.Emit(new AuditEvent
         {

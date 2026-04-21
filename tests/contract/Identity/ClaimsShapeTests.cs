@@ -183,6 +183,68 @@ public class ClaimsShapeTests
     }
 
     [Fact]
+    public void Token_Always_Emits_Profile_Ids_Claim_Even_When_Empty()
+    {
+        // No profileIds dict provided → claim must still be present as an
+        // empty object so frontend consumers can index safely.
+        var issued = CreateService().GenerateAccessToken(
+            BuildPersonalUser(),
+            TenantType.Family,
+            new[] { "parent" },
+            Guid.NewGuid());
+
+        var jwt = DecodeUnvalidated(issued.Token);
+        var raw = jwt.Claims.Single(c => c.Type == "profile_ids").Value;
+        Assert.Equal("{}", raw);
+    }
+
+    [Fact]
+    public void Token_Emits_Profile_Ids_As_Keyed_Object()
+    {
+        var studentProfileId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        var issued = CreateService().GenerateAccessToken(
+            BuildManagedUser(),
+            TenantType.Family,
+            new[] { "student" },
+            Guid.NewGuid(),
+            profileIds: new System.Collections.Generic.Dictionary<string, Guid>
+            {
+                ["student"] = studentProfileId,
+            });
+
+        var jwt = DecodeUnvalidated(issued.Token);
+        var raw = jwt.Claims.Single(c => c.Type == "profile_ids").Value;
+        using var doc = System.Text.Json.JsonDocument.Parse(raw);
+        Assert.Equal(studentProfileId.ToString("D"), doc.RootElement.GetProperty("student").GetString());
+    }
+
+    [Fact]
+    public void Profile_Ids_Keys_Are_Sorted_Deterministically()
+    {
+        // Deterministic ordering keeps the JWT byte-for-byte reproducible
+        // across issues, which helps contract diffs and cache stability.
+        var studentId = Guid.NewGuid();
+        var teacherId = Guid.NewGuid();
+        var issued = CreateService().GenerateAccessToken(
+            BuildPersonalUser(),
+            TenantType.Family,
+            new[] { "parent" },
+            Guid.NewGuid(),
+            profileIds: new System.Collections.Generic.Dictionary<string, Guid>
+            {
+                ["teacher"] = teacherId,
+                ["student"] = studentId,
+            });
+
+        var jwt = DecodeUnvalidated(issued.Token);
+        var raw = jwt.Claims.Single(c => c.Type == "profile_ids").Value;
+        // Ordinal sort puts "student" before "teacher".
+        var studentIdx = raw.IndexOf("student", StringComparison.Ordinal);
+        var teacherIdx = raw.IndexOf("teacher", StringComparison.Ordinal);
+        Assert.True(studentIdx < teacherIdx, $"Expected 'student' before 'teacher' in: {raw}");
+    }
+
+    [Fact]
     public void ValidateAccessToken_Accepts_Freshly_Issued_Token()
     {
         var svc = CreateService();

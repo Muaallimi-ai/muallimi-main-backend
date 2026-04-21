@@ -112,4 +112,14 @@
     <Compile Include="..\contract\Identity\BackfillContractTests.cs" LinkBase="contract\Identity" />
   </ItemGroup>
 
+  <!-- Phase 9 identity contract tests (claims shape, envelope shape, DTO JSON
+       attribute coverage). Previously authored at contract/Identity/ but
+       never linked into any csproj — wiring them here so they actually run. -->
+  <ItemGroup>
+    <Compile Include="..\contract\Identity\ClaimsShapeTests.cs" LinkBase="contract\Identity" />
+    <Compile Include="..\contract\Identity\ApiResponseEnvelopeShapeTests.cs" LinkBase="contract\Identity" />
+    <Compile Include="..\contract\Identity\IdentityDtoJsonAttributesTests.cs" LinkBase="contract\Identity" />
+    <Compile Include="..\contract\Identity\ParentChildCommandValidatorTests.cs" LinkBase="contract\Identity" />
+  </ItemGroup>
+
 </Project>

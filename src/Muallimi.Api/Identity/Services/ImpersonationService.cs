@@ -70,17 +70,20 @@ public sealed class ImpersonationService : IImpersonationService
     private readonly MuallimiDbContext _db;
     private readonly ITokenService _tokens;
     private readonly AuditEventEmitter _audit;
+    private readonly IProfileIdsResolver _profileIds;
     private readonly ILogger<ImpersonationService> _logger;
 
     public ImpersonationService(
         MuallimiDbContext db,
         ITokenService tokens,
         AuditEventEmitter audit,
+        IProfileIdsResolver profileIds,
         ILogger<ImpersonationService> logger)
     {
         _db = db;
         _tokens = tokens;
         _audit = audit;
+        _profileIds = profileIds;
         _logger = logger;
     }
 
@@ -143,12 +146,16 @@ public sealed class ImpersonationService : IImpersonationService
 
         // Issue an impersonation token reflecting the TARGET user's identity.
         // A synthetic session id is used (the impersonation session id itself).
+        // profile_ids are resolved for the TARGET so operators see the
+        // impersonated user's domain scope, not their own.
+        var targetProfileIds = await _profileIds.ResolveAsync(target.Id, target.TenantId, ct).ConfigureAwait(false);
         var accessToken = _tokens.GenerateAccessToken(
             target,
             targetTenant.Type,
             roleNames,
             session.Id,        // session_id claim = impersonation session id
-            impersonationClaim);
+            impersonationClaim,
+            profileIds: targetProfileIds);
 
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 

@@ -84,6 +84,20 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// JSON wire format:
+// Phase 3+ contracts (student / parent / teacher / school-admin / operator / billing etc.)
+// use snake_case everywhere — request bodies AND response payloads — per the
+// contract markdown files. Auth / Identity DTOs use camelCase and PIN that via
+// explicit [JsonPropertyName] attributes on every property (verified 100%
+// coverage in Muallimi.Application/Identity/Dtos). Attributes override the
+// policy, so flipping the global default to snake_case works without touching
+// the Identity module.
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
+    options.SerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
+});
+
 // Serilog
 builder.Host.UseSerilog((context, config) => config
     .ReadFrom.Configuration(context.Configuration)

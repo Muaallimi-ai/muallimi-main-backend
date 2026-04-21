@@ -75,7 +75,7 @@ public sealed class IdentityAuthorizationFilter : IEndpointFilter
         {
             if (!requirement.AcceptedRoles.Any(r => userRoles.Contains(r)))
             {
-                return Results.Forbid();
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
         }
         return await next(context);

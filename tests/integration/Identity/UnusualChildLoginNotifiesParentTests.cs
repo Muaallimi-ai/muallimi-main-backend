@@ -164,6 +164,11 @@ public class UnusualChildLoginNotifiesParentTests
             h.Sessions, h.Audit.Emitter, h.Notifications,
             h.Verification,
             new VerificationLinkBuilder("http://test.local"),
+            new Muallimi.Application.Identity.Services.ProfileIdsResolver(
+                new Muallimi.Application.Identity.Services.IProfileIdContributor[]
+                {
+                    new Muallimi.Api.Identity.Services.StudentProfileIdContributor(h.Db),
+                }),
             NullLogger<AuthService>.Instance,
             twoFactor: null,
             unusualLoginDetector: detector);

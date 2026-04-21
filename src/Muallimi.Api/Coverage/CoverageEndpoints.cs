@@ -35,7 +35,7 @@ public static class CoverageEndpoints
             var tenantId = httpContext.Items["TenantId"]?.ToString() ?? "local";
 
             if (actor != "anonymous" && !AllowedRoles.Contains(actor))
-                return Results.Forbid();
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             CurriculumType? filterType = null;
             if (!string.IsNullOrWhiteSpace(curriculumType))

@@ -56,7 +56,7 @@ public static class ExamResultEndpoints
         if (exam is null) return Results.NotFound(new { error = "exam_not_found" });
         if (teacherId is not null && exam.CreatedByTeacherId != teacherId)
         {
-            return Results.Forbid();
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
         }
 
         var qList = await questions.ListForExamAsync(tenantId, examId, ct);
@@ -186,7 +186,7 @@ public static class ExamResultEndpoints
         if (exam is null) return Results.NotFound(new { error = "exam_not_found" });
         if (teacherId is not null && exam.CreatedByTeacherId != teacherId)
         {
-            return Results.Forbid();
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
         }
 
         if (exam.Status == ExamStates.Closed)

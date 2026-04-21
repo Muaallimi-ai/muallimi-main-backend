@@ -158,7 +158,7 @@ public static class ExamPlayerEndpoints
                 && x.ce.UnenrolledAt == null
                 && x.ea.ExamId == examId,
                 ct);
-        if (!studentEligible) return Results.Forbid();
+        if (!studentEligible) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         if (exam.Status != ExamStates.Open)
         {

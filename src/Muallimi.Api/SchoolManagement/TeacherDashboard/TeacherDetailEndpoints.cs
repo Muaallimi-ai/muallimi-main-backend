@@ -58,7 +58,7 @@ public static class TeacherDetailEndpoints
 
         var response = await service.GetClassSubjectDetailAsync(
             tenantId, schoolTenantId, teacherId, classGroupId, subjectId, ct);
-        if (response is null) return Results.Forbid();
+        if (response is null) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         var correlationId = SchoolManagementHeaders.ResolveCorrelationId(http);
 
@@ -119,7 +119,7 @@ public static class TeacherDetailEndpoints
 
         var response = await service.GetStudentDetailAsync(
             tenantId, schoolTenantId, teacherId, studentId, ct);
-        if (response is null) return Results.Forbid();
+        if (response is null) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         var correlationId = SchoolManagementHeaders.ResolveCorrelationId(http);
 

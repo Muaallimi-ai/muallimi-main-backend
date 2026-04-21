@@ -45,7 +45,7 @@ public static class SessionStartEndpoint
                 var profile = await db.StudentProfiles
                     .FirstOrDefaultAsync(p => p.Id == request.StudentProfileId, ct);
                 if (profile is null || profile.TenantId != tenantId)
-                    return Results.Forbid();
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
 
                 var correlationId = ResolveCorrelationId(http);
                 var tutorLanguage = ResolveTutorLanguage(request.PreferredLanguage, profile);

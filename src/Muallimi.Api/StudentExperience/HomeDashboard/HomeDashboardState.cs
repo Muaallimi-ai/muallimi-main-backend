@@ -9,6 +9,9 @@ namespace Muallimi.Api.StudentExperience.HomeDashboard;
 /// response directly into <c>SessionScopeProvider</c> so every downstream
 /// mode entry can look up the tenant, curriculum, language, and plan tier
 /// without a second round trip.
+///
+/// Wire format is snake_case per the Phase 3 contract. Enforced globally by
+/// `ConfigureHttpJsonOptions` in Program.cs (SnakeCaseLower naming policy).
 /// </summary>
 public sealed record HomeDashboardState(
     Guid SessionId,

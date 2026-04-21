@@ -102,6 +102,14 @@ public static class IdentityServiceCollectionExtensions
         services.AddSingleton<ITwoFactorService, TotpTwoFactorService>();
         services.AddSingleton<IPasswordStrengthValidator, ZxcvbnPasswordStrengthValidator>();
 
+        // ── profile_ids claim resolution (generalized 1:1 profile map) ─
+        // Every 1:1 domain profile that is keyed to a User registers one
+        // IProfileIdContributor implementation. The aggregator emits the
+        // union as the `profile_ids` JWT claim so the frontend reads
+        // every domain id from a single source of truth.
+        services.AddScoped<IProfileIdsResolver, ProfileIdsResolver>();
+        services.AddScoped<IProfileIdContributor, StudentProfileIdContributor>();
+
         // ── Tenant + session services ────────────────────────────
         services.AddSingleton<ITenantResolutionService, TenantResolutionService>();
         services.AddScoped<ISessionRepository, EfSessionRepository>();

@@ -35,7 +35,8 @@ public interface ITokenService
         TenantType tenantType,
         IReadOnlyCollection<string> roleNames,
         Guid sessionId,
-        ImpersonationClaim? impersonation = null);
+        ImpersonationClaim? impersonation = null,
+        IReadOnlyDictionary<string, Guid>? profileIds = null);
 
     (string token, string hash) GenerateRefreshToken();
 
@@ -74,7 +75,8 @@ public sealed class JwtTokenService : ITokenService
         TenantType tenantType,
         IReadOnlyCollection<string> roleNames,
         Guid sessionId,
-        ImpersonationClaim? impersonation = null)
+        ImpersonationClaim? impersonation = null,
+        IReadOnlyDictionary<string, Guid>? profileIds = null)
     {
         var now = DateTime.UtcNow;
         var expires = now.AddMinutes(_options.AccessTokenMinutes);
@@ -115,6 +117,12 @@ public sealed class JwtTokenService : ITokenService
             claims.Add(new Claim("impersonating", string.Empty));
         }
 
+        // profile_ids — generalized 1:1 domain profile resolution.
+        // Always emitted so consumers can index without a null check;
+        // empty object when the user has no domain profile.
+        var profileIdsJson = SerializeProfileIds(profileIds);
+        claims.Add(new Claim("profile_ids", profileIdsJson, JsonClaimValueTypes.Json));
+
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,
             audience: _options.Audience,
@@ -133,6 +141,20 @@ public sealed class JwtTokenService : ITokenService
         var token = Base64UrlEncoder.Encode(raw);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
         return (token, hash);
+    }
+
+    private static string SerializeProfileIds(IReadOnlyDictionary<string, Guid>? profileIds)
+    {
+        if (profileIds is null || profileIds.Count == 0)
+        {
+            return "{}";
+        }
+        var ordered = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kv in profileIds)
+        {
+            ordered[kv.Key] = kv.Value.ToString("D");
+        }
+        return JsonSerializer.Serialize(ordered);
     }
 
     public ClaimsPrincipal? ValidateAccessToken(string token)
