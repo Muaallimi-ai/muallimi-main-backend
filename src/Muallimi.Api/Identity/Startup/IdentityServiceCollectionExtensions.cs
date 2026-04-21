@@ -1,4 +1,6 @@
 using System;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,6 +42,15 @@ public static class IdentityServiceCollectionExtensions
 {
     public const string IdentityCorsPolicy = "IdentityCors";
 
+    /// <summary>
+    /// Dev-only JWT secret used when <c>IDENTITY_JWT_SECRET_KEY</c> is
+    /// unset. Public by design — any deployment outside
+    /// <c>ASPNETCORE_ENVIRONMENT=Development</c> MUST override it. The
+    /// startup guard in <see cref="AddIdentityModule"/> refuses to boot
+    /// when the fallback is in use in any non-Development env.
+    /// </summary>
+    public const string DevFallbackJwtSecret = "dev-only-please-rotate-minimum-32-chars-secret-key";
+
     public static IServiceCollection AddIdentityModule(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -47,7 +58,9 @@ public static class IdentityServiceCollectionExtensions
         // ── Options from env / config ────────────────────────────
         var jwtSecret = configuration["Identity:Jwt:SecretKey"]
             ?? Environment.GetEnvironmentVariable("IDENTITY_JWT_SECRET_KEY")
-            ?? "dev-only-please-rotate-minimum-32-chars-secret-key";
+            ?? DevFallbackJwtSecret;
+        var jwtPreviousSecret = configuration["Identity:Jwt:PreviousSecretKey"]
+            ?? Environment.GetEnvironmentVariable("IDENTITY_JWT_SECRET_KEY_PREVIOUS");
         var jwtIssuer = configuration["Identity:Jwt:Issuer"]
             ?? Environment.GetEnvironmentVariable("IDENTITY_JWT_ISSUER")
             ?? "muallimi-main-backend";
@@ -65,35 +78,71 @@ public static class IdentityServiceCollectionExtensions
                 out var rd)
             ? rd : 7;
 
-        services.AddSingleton(new JwtTokenServiceOptions
+        var totpKeyBase64 = configuration["Identity:TotpEncryptionKey"]
+            ?? Environment.GetEnvironmentVariable("IDENTITY_TOTP_ENCRYPTION_KEY");
+
+        // ── Fail-closed startup guards ────────────────────────────
+        // The only dev fallbacks in this module (JWT secret + TOTP key)
+        // are deliberately insecure and public. Refuse to boot with
+        // either one in use outside Development.
+        EnforceProductionSecretHygiene(configuration, jwtSecret, totpKeyBase64);
+
+        var jwtOptions = new JwtTokenServiceOptions
         {
             SecretKey = jwtSecret,
+            PreviousSecretKey = jwtPreviousSecret,
             Issuer = jwtIssuer,
             Audience = jwtAudience,
             AccessTokenMinutes = accessMinutes,
             RefreshTokenDays = refreshDays,
-        });
+        };
+        services.AddSingleton(jwtOptions);
+
+        // ── ASP.NET authentication pipeline (JWT Bearer) ─────────
+        // Validation parameters are built from the same options object
+        // that JwtTokenService.ValidateAccessToken uses, so the two
+        // paths cannot drift. The algorithm is pinned to HS256 and
+        // IssuerSigningKeys accepts both current and previous keys
+        // during a rotation window.
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.MapInboundClaims = false;
+                options.TokenValidationParameters = jwtOptions.CreateValidationParameters();
+                options.Events = new JwtBearerEvents
+                {
+                    OnAuthenticationFailed = context =>
+                    {
+                        var logger = context.HttpContext.RequestServices
+                            .GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("Muallimi.Identity.JwtBearer");
+                        // LogInformation (not Warning) because anonymous
+                        // 401s on unauthenticated endpoints are routine.
+                        // Never log the token itself — GetType().Name is
+                        // enough to classify the failure (expired /
+                        // invalid signature / malformed / ...).
+                        logger.LogInformation(
+                            "JWT bearer validation failed: {ExceptionType} on {Method} {Path}",
+                            context.Exception.GetType().Name,
+                            context.HttpContext.Request.Method,
+                            context.HttpContext.Request.Path);
+                        return Task.CompletedTask;
+                    },
+                };
+            });
+        services.AddAuthorization();
 
         // ── Cryptography (AES-256-GCM for TOTP at rest) ──────────
-        var totpKeyBase64 = configuration["Identity:TotpEncryptionKey"]
-            ?? Environment.GetEnvironmentVariable("IDENTITY_TOTP_ENCRYPTION_KEY");
         services.AddSingleton<IAesEncryptor>(_ =>
         {
             if (!string.IsNullOrWhiteSpace(totpKeyBase64))
             {
-                try
-                {
-                    return AesEncryptor.FromBase64Key(totpKeyBase64);
-                }
-                catch
-                {
-                    // Fall through to dev fallback — logged in Program.cs startup.
-                }
+                return AesEncryptor.FromBase64Key(totpKeyBase64);
             }
-            // Dev fallback: deterministic zero key so local dev doesn't crash.
-            // Production startup validation (T044) must reject this.
-            var devKey = new byte[32];
-            return new AesEncryptor(devKey);
+            // Dev fallback: deterministic zero key so local dev doesn't
+            // crash. The production guard above has already refused to
+            // boot if this branch would be hit outside Development.
+            return new AesEncryptor(new byte[32]);
         });
 
         // ── Password + JWT + TOTP + password strength ────────────
@@ -259,5 +308,37 @@ public static class IdentityServiceCollectionExtensions
         services.AddHttpContextAccessor();
 
         return services;
+    }
+
+    /// <summary>
+    /// Fail-closed guard that refuses to boot when any of the
+    /// deliberately-insecure dev fallbacks (public JWT secret, zero TOTP
+    /// key) are in use outside <c>ASPNETCORE_ENVIRONMENT=Development</c>.
+    /// Extracted so it can be unit-tested without spinning a host.
+    /// </summary>
+    public static void EnforceProductionSecretHygiene(
+        IConfiguration configuration,
+        string jwtSecret,
+        string? totpKeyBase64)
+    {
+        var env = configuration["ASPNETCORE_ENVIRONMENT"]
+            ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+            ?? "Production";
+        if (string.Equals(env, "Development", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        if (string.Equals(jwtSecret, DevFallbackJwtSecret, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to boot: ASPNETCORE_ENVIRONMENT='{env}' but IDENTITY_JWT_SECRET_KEY is unset. " +
+                "The dev fallback is public in source; set a unique ≥32-byte secret (env var or Identity:Jwt:SecretKey config).");
+        }
+        if (string.IsNullOrWhiteSpace(totpKeyBase64))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to boot: ASPNETCORE_ENVIRONMENT='{env}' but IDENTITY_TOTP_ENCRYPTION_KEY is unset. " +
+                "Generate a base64-encoded AES-256 key (`openssl rand -base64 32`) and set the env var.");
+        }
     }
 }

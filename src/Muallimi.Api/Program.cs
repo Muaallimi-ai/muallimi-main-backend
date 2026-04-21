@@ -550,6 +550,12 @@ Muallimi.Api.Security.DataEncryption.ColumnEncryptionWiring.UsePhase6ColumnEncry
 // BEFORE correlation-id + entitlement middleware so downstream handlers
 // see the resolved tenant and consistent response headers.
 app.UseIdentitySecurityHeaders();
+// Phase 9: ASP.NET authentication/authorization. Must run BEFORE
+// UseIdentityTenantResolution so context.User.Identity?.IsAuthenticated
+// is true when the JWT is present — otherwise the tenant claim is
+// ignored and only the legacy X-Tenant-Id header is honoured.
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseIdentityTenantResolution();
 app.UseImpersonationContext();
 

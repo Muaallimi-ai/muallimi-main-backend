@@ -48,10 +48,64 @@ public sealed record AccessTokenDto(string Token, DateTime ExpiresAt);
 public sealed class JwtTokenServiceOptions
 {
     public string SecretKey { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Optional previous signing key, accepted by the validator during a
+    /// key-rotation window. Minting always uses <see cref="SecretKey"/>.
+    /// Rotation playbook: set the new key as <see cref="SecretKey"/>, move
+    /// the old key here, wait <see cref="AccessTokenMinutes"/> minutes for
+    /// every outstanding access token to expire, then unset.
+    /// </summary>
+    public string? PreviousSecretKey { get; init; }
+
     public string Issuer { get; init; } = "muallimi-main-backend";
     public string Audience { get; init; } = "muallimi-platform";
     public int AccessTokenMinutes { get; init; } = 15;
     public int RefreshTokenDays { get; init; } = 7;
+
+    /// <summary>
+    /// Single source of truth for clock-skew tolerance. Both the bearer
+    /// middleware and <see cref="JwtTokenService.ValidateAccessToken"/>
+    /// read this — they cannot drift.
+    /// </summary>
+    public static readonly TimeSpan DefaultClockSkew = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Builds the canonical <see cref="TokenValidationParameters"/> shared
+    /// by the ASP.NET JWT-bearer middleware and
+    /// <see cref="JwtTokenService.ValidateAccessToken"/>. Accepts the
+    /// current <see cref="SecretKey"/> and (when set) the
+    /// <see cref="PreviousSecretKey"/> for zero-downtime rotation. The
+    /// algorithm is pinned to HS256 as defense-in-depth against alg
+    /// confusion.
+    /// </summary>
+    public TokenValidationParameters CreateValidationParameters()
+    {
+        if (string.IsNullOrWhiteSpace(SecretKey))
+        {
+            throw new InvalidOperationException("JwtTokenServiceOptions.SecretKey must be set.");
+        }
+        var keys = new List<SecurityKey>
+        {
+            new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey)),
+        };
+        if (!string.IsNullOrWhiteSpace(PreviousSecretKey))
+        {
+            keys.Add(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(PreviousSecretKey)));
+        }
+        return new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = Issuer,
+            ValidAudience = Audience,
+            IssuerSigningKeys = keys,
+            ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
+            ClockSkew = DefaultClockSkew,
+        };
+    }
 }
 
 public sealed class JwtTokenService : ITokenService
@@ -159,20 +213,9 @@ public sealed class JwtTokenService : ITokenService
 
     public ClaimsPrincipal? ValidateAccessToken(string token)
     {
-        var parameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = _options.Issuer,
-            ValidAudience = _options.Audience,
-            IssuerSigningKey = _signingKey,
-            ClockSkew = TimeSpan.FromSeconds(30),
-        };
         try
         {
-            var principal = _handler.ValidateToken(token, parameters, out _);
+            var principal = _handler.ValidateToken(token, _options.CreateValidationParameters(), out _);
             return principal;
         }
         catch

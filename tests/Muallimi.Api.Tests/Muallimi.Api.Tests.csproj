@@ -120,6 +120,7 @@
     <Compile Include="..\contract\Identity\ApiResponseEnvelopeShapeTests.cs" LinkBase="contract\Identity" />
     <Compile Include="..\contract\Identity\IdentityDtoJsonAttributesTests.cs" LinkBase="contract\Identity" />
     <Compile Include="..\contract\Identity\ParentChildCommandValidatorTests.cs" LinkBase="contract\Identity" />
+    <Compile Include="..\contract\Identity\JwtHardeningContractTests.cs" LinkBase="contract\Identity" />
   </ItemGroup>
 
 </Project>
