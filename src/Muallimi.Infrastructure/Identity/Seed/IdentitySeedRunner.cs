@@ -53,5 +53,15 @@ public sealed class IdentitySeedRunner
         {
             _logger.LogInformation("Identity seed: super-admin seeded from env.");
         }
+
+        // Dev-friendly curriculum-admin bootstrap — idempotent by email,
+        // no-op if CURRICULUM_ADMIN_EMAIL / CURRICULUM_ADMIN_INITIAL_PASSWORD
+        // are unset.
+        var curriculumAdmin = sp.GetRequiredService<CurriculumAdminSeeder>();
+        var curriculumOutcome = await curriculumAdmin.EnsureSeededAsync(ct).ConfigureAwait(false);
+        if (curriculumOutcome == CurriculumAdminSeedOutcome.Seeded)
+        {
+            _logger.LogInformation("Identity seed: curriculum-admin seeded from env.");
+        }
     }
 }

@@ -280,6 +280,7 @@ public static class IdentityServiceCollectionExtensions
         services.AddScoped<RoleSeeder>();
         services.AddScoped<TenantSeeder>();
         services.AddScoped<SuperAdminSeeder>();
+        services.AddScoped<CurriculumAdminSeeder>();
         services.AddSingleton<IdentitySeedRunner>();
 
         // ── US7: legacy backfill (T165) ───────────────────────────

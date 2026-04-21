@@ -80,6 +80,10 @@ services:
       SUPER_ADMIN_ROLES: ${SUPER_ADMIN_ROLES:-super-admin,platform-operator}
       SUPER_ADMIN_FULL_NAME: ${SUPER_ADMIN_FULL_NAME:-Super Admin}
       SUPER_ADMIN_LOCALE: ${SUPER_ADMIN_LOCALE:-ar}
+      CURRICULUM_ADMIN_EMAIL: ${CURRICULUM_ADMIN_EMAIL:-curriculum@muaallimi.local}
+      CURRICULUM_ADMIN_INITIAL_PASSWORD: ${CURRICULUM_ADMIN_INITIAL_PASSWORD:-Curriculum@Admin2026!}
+      CURRICULUM_ADMIN_FULL_NAME: ${CURRICULUM_ADMIN_FULL_NAME:-Curriculum Admin}
+      CURRICULUM_ADMIN_LOCALE: ${CURRICULUM_ADMIN_LOCALE:-ar}
     depends_on:
       postgres:
         condition: service_healthy
