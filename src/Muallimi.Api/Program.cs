@@ -382,6 +382,7 @@ builder.Services.AddHostedService<Muallimi.Api.OperatorManagement.TenantHealth.T
 // ── Phase 6 US1: Billing + Payments MVP ──
 builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionPlans.ISubscriptionPlanService,
     Muallimi.Api.Billing.SubscriptionPlans.SubscriptionPlanService>();
+builder.Services.AddScoped<Muallimi.Infrastructure.Billing.Seed.SubscriptionPlanSeeder>();
 builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionLifecycle.ISubscriptionLifecycleService,
     Muallimi.Api.Billing.SubscriptionLifecycle.SubscriptionLifecycleService>();
 builder.Services.AddScoped<Muallimi.Api.Billing.SubscriptionLifecycle.IPhase5LicenseSyncService,
@@ -2350,6 +2351,23 @@ try
 catch (Exception ex)
 {
     app.Logger.LogWarning(ex, "identity.seed_skipped");
+}
+
+// ── Phase 6 Billing: seed the 3 canonical family plans (idempotent) ──
+try
+{
+    using var billingSeedScope = app.Services.CreateScope();
+    var planSeeder = billingSeedScope.ServiceProvider
+        .GetRequiredService<Muallimi.Infrastructure.Billing.Seed.SubscriptionPlanSeeder>();
+    var inserted = await planSeeder.EnsureSeededAsync();
+    if (inserted > 0)
+    {
+        app.Logger.LogInformation("billing.plan_seed: {Count} family plan(s) inserted.", inserted);
+    }
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "billing.plan_seed_skipped");
 }
 
 app.Run();
