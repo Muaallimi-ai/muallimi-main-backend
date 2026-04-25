@@ -36,6 +36,18 @@ public interface IParentNotificationRepository
         int limit,
         CancellationToken ct = default);
 
+    Task<int> CountUnreadForParentAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        IReadOnlyCollection<Guid> allowedChildIds,
+        CancellationToken ct = default);
+
+    Task<int> MarkAllAsReadForParentAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        IReadOnlyCollection<Guid> allowedChildIds,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<ParentNotification>> ListDeferredReadyForDispatchAsync(
         DateTime now,
         CancellationToken ct = default);
@@ -85,6 +97,41 @@ public sealed class ParentNotificationRepository : IParentNotificationRepository
             .OrderByDescending(n => n.CreatedAt)
             .Take(limit)
             .ToListAsync(ct);
+    }
+
+    public Task<int> CountUnreadForParentAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        IReadOnlyCollection<Guid> allowedChildIds,
+        CancellationToken ct = default)
+    {
+        if (allowedChildIds.Count == 0) return Task.FromResult(0);
+        var childSet = allowedChildIds.ToHashSet();
+        return _db.ParentNotifications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(n => n.TenantId == tenantId && n.ParentProfileId == parentProfileId)
+            .Where(n => childSet.Contains(n.ChildId))
+            .Where(n => n.DeliveryState == "dispatched" || n.DeliveryState == "deferred")
+            .CountAsync(ct);
+    }
+
+    public async Task<int> MarkAllAsReadForParentAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        IReadOnlyCollection<Guid> allowedChildIds,
+        CancellationToken ct = default)
+    {
+        if (allowedChildIds.Count == 0) return 0;
+        var childSet = allowedChildIds.ToHashSet();
+        var rows = await _db.ParentNotifications
+            .IgnoreQueryFilters()
+            .Where(n => n.TenantId == tenantId && n.ParentProfileId == parentProfileId)
+            .Where(n => childSet.Contains(n.ChildId))
+            .Where(n => n.DeliveryState == "dispatched" || n.DeliveryState == "deferred")
+            .ToListAsync(ct);
+        foreach (var row in rows) row.DeliveryState = "read";
+        return rows.Count;
     }
 
     public async Task<IReadOnlyList<ParentNotification>> ListDeferredReadyForDispatchAsync(

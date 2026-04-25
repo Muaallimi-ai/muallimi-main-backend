@@ -123,4 +123,14 @@
     <Compile Include="..\contract\Identity\JwtHardeningContractTests.cs" LinkBase="contract\Identity" />
   </ItemGroup>
 
+  <!-- Phase 4 parent notifications: contract test pinning routes + DTO shape,
+       integration tests covering the unread-count + mark-all-read repository
+       surface that backs the parent inbox sidebar badge. -->
+  <ItemGroup>
+    <Compile Include="..\contract\Engagement\ParentNotifications\ParentNotificationsContractTests.cs" LinkBase="contract\Engagement\ParentNotifications" />
+    <Compile Include="..\integration\Engagement\_lib\Phase4TestDbContext.cs" LinkBase="integration\Engagement\_lib" />
+    <Compile Include="..\integration\Engagement\_lib\ParentNotificationsTestHarness.cs" LinkBase="integration\Engagement\_lib" />
+    <Compile Include="..\integration\Engagement\ParentNotificationsUnreadAndMarkAllTests.cs" LinkBase="integration\Engagement" />
+  </ItemGroup>
+
 </Project>

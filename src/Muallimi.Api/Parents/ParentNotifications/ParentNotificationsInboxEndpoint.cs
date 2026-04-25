@@ -21,7 +21,9 @@ namespace Muallimi.Api.Parents.ParentNotifications;
 public static class ParentNotificationsInboxEndpoint
 {
     public const string Route = "/api/parent/notifications";
+    public const string UnreadCountRoute = "/api/parent/notifications/unread-count";
     public const string MarkReadRoute = "/api/parent/notifications/{notificationId:guid}/mark-read";
+    public const string MarkAllReadRoute = "/api/parent/notifications/mark-all-read";
     private const int DefaultInboxLimit = 50;
 
     public static IEndpointRouteBuilder MapParentNotificationsInbox(this IEndpointRouteBuilder routes)
@@ -29,8 +31,14 @@ public static class ParentNotificationsInboxEndpoint
         routes.MapGet(Route, HandleListAsync)
             .WithName("ParentNotificationsInbox")
             .WithTags("ParentNotifications");
+        routes.MapGet(UnreadCountRoute, HandleUnreadCountAsync)
+            .WithName("ParentNotificationsUnreadCount")
+            .WithTags("ParentNotifications");
         routes.MapPost(MarkReadRoute, HandleMarkReadAsync)
             .WithName("ParentNotificationMarkRead")
+            .WithTags("ParentNotifications");
+        routes.MapPost(MarkAllReadRoute, HandleMarkAllReadAsync)
+            .WithName("ParentNotificationMarkAllRead")
             .WithTags("ParentNotifications");
         return routes;
     }
@@ -50,8 +58,7 @@ public static class ParentNotificationsInboxEndpoint
         var correlationId = ParentDashboardHeaders.ResolveCorrelationId(http);
         var isImpersonation = ParentDashboardHeaders.TryGetOperatorContext(http, out var operatorActorId, out var reason);
 
-        var activeLinks = await links.ListActiveForParentAsync(tenantId, parentProfileId, ct);
-        var allowedChildIds = activeLinks.Select(l => l.StudentId).ToArray();
+        var allowedChildIds = await ResolveAllowedChildIdsAsync(links, tenantId, parentProfileId, ct);
 
         var rows = await notifications.ListForParentAsync(
             tenantId, parentProfileId, allowedChildIds, DefaultInboxLimit, ct);
@@ -118,5 +125,55 @@ public static class ParentNotificationsInboxEndpoint
             await db.SaveChangesAsync(ct);
         }
         return Results.NoContent();
+    }
+
+    public static async Task<IResult> HandleUnreadCountAsync(
+        HttpContext http,
+        IParentNotificationRepository notifications,
+        IChildLinkRepository links,
+        CancellationToken ct)
+    {
+        if (!ParentDashboardHeaders.TryGetTenantId(http, out var tenantId))
+            return Results.Unauthorized();
+        if (!ParentDashboardHeaders.TryGetParentProfileId(http, out var parentProfileId))
+            return Results.Unauthorized();
+
+        var allowedChildIds = await ResolveAllowedChildIdsAsync(links, tenantId, parentProfileId, ct);
+        var count = await notifications.CountUnreadForParentAsync(tenantId, parentProfileId, allowedChildIds, ct);
+
+        var correlationId = ParentDashboardHeaders.ResolveCorrelationId(http);
+        http.Response.Headers["X-Correlation-Id"] = correlationId;
+        return Results.Ok(new { unread = count, correlation_id = correlationId });
+    }
+
+    public static async Task<IResult> HandleMarkAllReadAsync(
+        HttpContext http,
+        IParentNotificationRepository notifications,
+        IChildLinkRepository links,
+        Muallimi.Infrastructure.Persistence.MuallimiDbContext db,
+        CancellationToken ct)
+    {
+        if (!ParentDashboardHeaders.TryGetTenantId(http, out var tenantId))
+            return Results.Unauthorized();
+        if (!ParentDashboardHeaders.TryGetParentProfileId(http, out var parentProfileId))
+            return Results.Unauthorized();
+
+        var allowedChildIds = await ResolveAllowedChildIdsAsync(links, tenantId, parentProfileId, ct);
+        var marked = await notifications.MarkAllAsReadForParentAsync(tenantId, parentProfileId, allowedChildIds, ct);
+        if (marked > 0) await db.SaveChangesAsync(ct);
+
+        var correlationId = ParentDashboardHeaders.ResolveCorrelationId(http);
+        http.Response.Headers["X-Correlation-Id"] = correlationId;
+        return Results.Ok(new { marked, correlation_id = correlationId });
+    }
+
+    private static async Task<Guid[]> ResolveAllowedChildIdsAsync(
+        IChildLinkRepository links,
+        Guid tenantId,
+        Guid parentProfileId,
+        CancellationToken ct)
+    {
+        var activeLinks = await links.ListActiveForParentAsync(tenantId, parentProfileId, ct);
+        return activeLinks.Select(l => l.StudentId).ToArray();
     }
 }

@@ -27,8 +27,14 @@ public class ParentNotificationsContractTests
     {
         Assert.Equal("/api/parent/notifications", ParentNotificationsInboxEndpoint.Route);
         Assert.Equal(
+            "/api/parent/notifications/unread-count",
+            ParentNotificationsInboxEndpoint.UnreadCountRoute);
+        Assert.Equal(
             "/api/parent/notifications/{notificationId:guid}/mark-read",
             ParentNotificationsInboxEndpoint.MarkReadRoute);
+        Assert.Equal(
+            "/api/parent/notifications/mark-all-read",
+            ParentNotificationsInboxEndpoint.MarkAllReadRoute);
         Assert.Equal("/api/parent/notifications/preferences", ParentPreferencesEndpoint.Route);
     }
 
