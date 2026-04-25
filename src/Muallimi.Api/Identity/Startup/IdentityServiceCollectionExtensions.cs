@@ -158,6 +158,7 @@ public static class IdentityServiceCollectionExtensions
         // every domain id from a single source of truth.
         services.AddScoped<IProfileIdsResolver, ProfileIdsResolver>();
         services.AddScoped<IProfileIdContributor, StudentProfileIdContributor>();
+        services.AddScoped<IProfileIdContributor, ParentProfileIdContributor>();
 
         // ── Tenant + session services ────────────────────────────
         services.AddSingleton<ITenantResolutionService, TenantResolutionService>();

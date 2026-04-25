@@ -12,6 +12,7 @@ using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
+using Muallimi.Domain.Parents;
 using Muallimi.Infrastructure.Persistence;
 
 namespace Muallimi.Api.Identity.Services;
@@ -199,9 +200,29 @@ public sealed class AuthService : IAuthService
             GrantedAt = DateTime.UtcNow,
         };
 
+        // Parent profile is created atomically with the user + tenant — it
+        // owns notification preferences, child links, and badge state, so
+        // every authenticated parent must have one. The id is fresh; the
+        // legacy IdentityId column is set to the same value (it predates the
+        // Phase 9 UserId FK and is kept non-null for back-compat).
+        var now = DateTime.UtcNow;
+        var parentProfile = new ParentProfile
+        {
+            ParentProfileId = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            IdentityId = user.Id,
+            UserId = user.Id,
+            PreferredLanguage = cmd.Locale == "en" ? "en" : "ar",
+            Locale = cmd.Locale == "en" ? "en-US" : "ar-EG",
+            Timezone = "Africa/Cairo",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
         _db.IdentityTenants.Add(tenant);
         _db.IdentityUsers.Add(user);
         _db.IdentityUserRoles.Add(grant);
+        _db.ParentProfiles.Add(parentProfile);
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
