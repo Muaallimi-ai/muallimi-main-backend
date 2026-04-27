@@ -71,6 +71,12 @@ services:
       Minio__CurriculumBucket: muallimi-curriculum-local
       Seq__Url: http://seq:5341
       AiService__BaseUrl: http://ai-service:5272
+      # ── Paymob (loaded from infra/.env — never commit real values) ──
+      Paymob__ApiKey: ${Paymob__ApiKey:-}
+      Paymob__IntegrationId: ${Paymob__IntegrationId:-}
+      Paymob__IframeId: ${Paymob__IframeId:-}
+      Paymob__HmacSecret: ${Paymob__HmacSecret:-}
+      Paymob__BaseUrl: ${Paymob__BaseUrl:-https://accept.paymob.com}
       Mailpit__Enabled: "true"
       Mailpit__SmtpHost: mailpit
       Mailpit__SmtpPort: "1025"
@@ -139,6 +145,35 @@ services:
         condition: service_healthy
       main-backend:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ── ngrok tunnel ─────────────────────────────────────────────────────────
+  # Exposes main-backend publicly so Paymob can POST webhooks to localhost.
+  # Only starts when the "ngrok" profile is active (i.e. NGROK_AUTHTOKEN is set).
+  # start.sh enables the profile automatically when NGROK_AUTHTOKEN is exported.
+  #
+  # Public URL is resolved at request time by NgrokPublicUrlResolver (queries
+  # http://ngrok:4040/api/tunnels). Management UI: http://localhost:4040
+  #
+  # Get your authtoken: https://dashboard.ngrok.com/get-started/your-authtoken
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: muallimi-ngrok
+    profiles: ["ngrok"]
+    command: http http://main-backend:5063 --log=stdout
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      main-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4040/api/tunnels | grep -q 'public_url' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
   frontend:

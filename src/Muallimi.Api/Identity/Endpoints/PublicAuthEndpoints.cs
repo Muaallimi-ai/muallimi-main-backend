@@ -253,6 +253,21 @@ public static class PublicAuthEndpoints
     {
         if (outcome.Success)
         {
+            // 202 Pending: registration accepted, payment required before account exists.
+            if (outcome.PendingPayload is not null)
+            {
+                var pendingEnvelope = new ApiResponseEnvelope<PendingRegistrationPayload>
+                {
+                    Success = true,
+                    Message = outcome.Message,
+                    Data = outcome.PendingPayload,
+                    Errors = null,
+                    Timestamp = System.DateTime.UtcNow,
+                    CorrelationId = correlationId,
+                };
+                return Results.Json(pendingEnvelope, statusCode: 202);
+            }
+
             var envelope = new ApiResponseEnvelope<AuthResponse>
             {
                 Success = true,

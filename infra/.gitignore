@@ -1,0 +1,5 @@
+# Real keys — never commit
+.env
+
+# Evidence / smoke output
+scripts/_evidence/

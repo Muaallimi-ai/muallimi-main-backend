@@ -15,7 +15,11 @@ namespace Muallimi.Api.Billing.SubscriptionLifecycle;
 /// failure), grace → active (recovery), grace → expired (window exceeded),
 /// active → cancelled (effective at period end), expired → active (re-subscribe).
 /// </summary>
-public sealed record SubscriptionCreateInput(Guid TenantId, Guid PlanId, string? PaymentMethodRef, string CorrelationId);
+/// <param name="InitialStatus">
+/// "trial" for direct/admin-created subscriptions; "pending_payment" when
+/// the parent must complete a hosted checkout before the subscription activates.
+/// </param>
+public sealed record SubscriptionCreateInput(Guid TenantId, Guid PlanId, string? PaymentMethodRef, string CorrelationId, string InitialStatus = "pending_payment");
 public sealed record SubscriptionPlanChangeResult(Guid SubscriptionId, Guid PreviousPlanId, Guid NewPlanId, DateTime EffectiveAt, decimal? ProratedChargeEgp);
 public sealed record SubscriptionCancelResult(Guid SubscriptionId, DateTime EffectiveAt);
 
@@ -23,6 +27,13 @@ public interface ISubscriptionLifecycleService
 {
     Task<Subscription> CreateAsync(SubscriptionCreateInput input, CancellationToken ct = default);
     Task<Subscription?> GetCurrentAsync(Guid tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Transitions a pending_payment subscription to active after the provider
+    /// confirms a successful payment via webhook.
+    /// </summary>
+    Task<Subscription?> ActivateFromPaymentAsync(Guid subscriptionId, string providerReference, string correlationId, CancellationToken ct = default);
+
     Task<SubscriptionPlanChangeResult?> ChangePlanAsync(Guid tenantId, Guid newPlanId, string correlationId, CancellationToken ct = default);
     Task<SubscriptionCancelResult?> CancelAsync(Guid tenantId, string? reason, string correlationId, CancellationToken ct = default);
     Task<Subscription?> EnterGraceAsync(Guid subscriptionId, string correlationId, CancellationToken ct = default);
@@ -55,24 +66,38 @@ public sealed class SubscriptionLifecycleService : ISubscriptionLifecycleService
     public async Task<Subscription> CreateAsync(SubscriptionCreateInput input, CancellationToken ct = default)
     {
         var existing = await _db.Subscriptions.FirstOrDefaultAsync(s => s.TenantId == input.TenantId, ct);
-        if (existing is not null && existing.Status != "expired" && existing.Status != "cancelled")
+        if (existing is not null
+            && existing.Status != "expired"
+            && existing.Status != "cancelled"
+            && existing.Status != "pending_payment")
             throw new InvalidOperationException($"Tenant {input.TenantId} already has a non-terminal subscription");
+
+        // Replace a stale pending_payment record rather than stacking duplicates.
+        if (existing?.Status == "pending_payment")
+        {
+            _db.Subscriptions.Remove(existing);
+            await _db.SaveChangesAsync(ct);
+        }
 
         var plan = await _db.SubscriptionPlans.AsNoTracking().FirstOrDefaultAsync(p => p.PlanId == input.PlanId && p.IsActive, ct)
             ?? throw new InvalidOperationException($"Plan {input.PlanId} not found or inactive");
 
         var now = DateTime.UtcNow;
         var cycleEnd = plan.BillingCycle == "yearly" ? now.AddYears(1) : now.AddMonths(1);
+        var allowedInitial = new HashSet<string> { "trial", "pending_payment" };
+        if (!allowedInitial.Contains(input.InitialStatus))
+            throw new ArgumentException($"Invalid initial status '{input.InitialStatus}'. Must be 'trial' or 'pending_payment'.");
+
         var subscription = new Subscription
         {
             SubscriptionId = Guid.NewGuid(),
             TenantId = input.TenantId,
             PlanId = plan.PlanId,
             PlanType = plan.PlanType,
-            Status = "trial",
+            Status = input.InitialStatus,
             CurrentPeriodStart = now,
             CurrentPeriodEnd = cycleEnd,
-            TrialEnd = now.AddDays(TrialDays),
+            TrialEnd = input.InitialStatus == "trial" ? now.AddDays(TrialDays) : null,
             PaymentMethodRef = input.PaymentMethodRef,
             CreatedAt = now,
             UpdatedAt = now,
@@ -109,7 +134,7 @@ public sealed class SubscriptionLifecycleService : ISubscriptionLifecycleService
     {
         var subscription = await _db.Subscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId, ct);
         if (subscription is null) return null;
-        if (subscription.Status is not ("trial" or "active" or "grace"))
+        if (subscription.Status is not ("trial" or "active" or "grace" or "pending_payment"))
             throw new InvalidOperationException($"Cannot change plan while subscription is {subscription.Status}");
 
         var currentPlan = await _db.SubscriptionPlans.AsNoTracking().FirstOrDefaultAsync(p => p.PlanId == subscription.PlanId, ct)
@@ -183,6 +208,39 @@ public sealed class SubscriptionLifecycleService : ISubscriptionLifecycleService
         }, ct);
 
         return new SubscriptionCancelResult(subscription.SubscriptionId, subscription.CurrentPeriodEnd);
+    }
+
+    public async Task<Subscription?> ActivateFromPaymentAsync(Guid subscriptionId, string providerReference, string correlationId, CancellationToken ct = default)
+    {
+        var subscription = await _db.Subscriptions.FirstOrDefaultAsync(s => s.SubscriptionId == subscriptionId, ct);
+        if (subscription is null) return null;
+        if (subscription.Status == "active") return subscription; // idempotent
+
+        var now = DateTime.UtcNow;
+        subscription.Status = "active";
+        subscription.PaymentMethodRef = providerReference;
+        subscription.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        await _outbox.EnqueueAsync(
+            subscription.TenantId,
+            "subscription_activated",
+            new { subscription_id = subscription.SubscriptionId, provider_reference = providerReference },
+            correlationId, ct);
+
+        await _audit.WriteAsync(new AuditTrailEntry
+        {
+            TenantId = subscription.TenantId,
+            ActorId = subscription.TenantId,
+            ActorType = "payment_webhook",
+            TargetId = subscription.SubscriptionId,
+            TargetType = "subscription",
+            ActionType = "subscription.activated",
+            Payload = new { provider_reference = providerReference },
+            CorrelationId = correlationId,
+        }, ct);
+
+        return subscription;
     }
 
     public async Task<Subscription?> EnterGraceAsync(Guid subscriptionId, string correlationId, CancellationToken ct = default)

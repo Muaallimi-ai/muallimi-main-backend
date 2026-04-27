@@ -10,6 +10,7 @@ using Muallimi.Application.Identity.Commands;
 using Muallimi.Application.Identity.Dtos;
 using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
+using Muallimi.Domain.Identity;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
 using Muallimi.Domain.Parents;
@@ -53,7 +54,15 @@ public interface IAuthService
         string? userAgent,
         string correlationId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Called by the payment webhook after a successful first payment.
+    /// Activates the user account and sends the email verification link.
+    /// </summary>
+    Task ActivateUserForTenantAsync(Guid tenantId, string correlationId, CancellationToken ct = default);
 }
+
+public sealed record PendingRegistrationPayload(string PendingId, string Nonce);
 
 public sealed record AuthOutcome(
     bool Success,
@@ -62,13 +71,21 @@ public sealed record AuthOutcome(
     AuthResponse? Payload = null,
     TwoFactorChallengeResponse? TwoFactor = null,
     IReadOnlyList<ApiResponseError>? Errors = null,
-    string? ErrorCode = null)
+    string? ErrorCode = null,
+    PendingRegistrationPayload? PendingPayload = null)
 {
     public static AuthOutcome Ok(AuthResponse payload, string message)
         => new(true, 200, message, Payload: payload);
 
     public static AuthOutcome Created(AuthResponse payload, string message)
         => new(true, 201, message, Payload: payload);
+
+    /// <summary>
+    /// Returned when registration is accepted but the account has not been created yet —
+    /// the parent must complete payment before the account exists in the DB.
+    /// </summary>
+    public static AuthOutcome Pending(PendingRegistrationPayload pending, string message)
+        => new(true, 202, message, PendingPayload: pending);
 
     public static AuthOutcome TwoFactorRequired(TwoFactorChallengeResponse challenge, string message)
         => new(false, 401, message, TwoFactor: challenge, ErrorCode: "two_factor_required");
@@ -134,115 +151,65 @@ public sealed class AuthService : IAuthService
         var normalized = NormalizeEmail(cmd.Email);
         var rl = await _rateLimit.IncrementAndCheckAsync("register-ip", cmd.IpAddress, 3, TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
         if (!rl.Allowed)
-        {
             return AuthOutcome.Fail(429, "rate_limited", "تم تجاوز عدد محاولات التسجيل.");
-        }
 
-        var emailTaken = await _db.IdentityUsers.IgnoreQueryFilters()
+        // Email already has a real active account — reject.
+        var emailTakenByRealUser = await _db.IdentityUsers.IgnoreQueryFilters()
             .AnyAsync(u => u.NormalizedEmail == normalized, ct).ConfigureAwait(false);
-        if (emailTaken)
-        {
+        if (emailTakenByRealUser)
             return AuthOutcome.Fail(409, "email_taken", "البريد الإلكتروني مستخدم بالفعل.");
-        }
 
+        // Phone check against real accounts.
         var normalizedPhone = Muallimi.Application.Identity.Commands.ValidationRules.NormalizePhone(cmd.PhoneNumber);
         if (!string.IsNullOrEmpty(normalizedPhone))
         {
             var phoneTaken = await _db.IdentityUsers.IgnoreQueryFilters()
                 .AnyAsync(u => u.PhoneNumber == normalizedPhone, ct).ConfigureAwait(false);
             if (phoneTaken)
-            {
                 return AuthOutcome.Fail(409, "phone_taken", "رقم الهاتف مستخدم مسبقًا.");
-            }
         }
 
-        var tenant = new Tenant
-        {
-            Id = Guid.NewGuid(),
-            Type = TenantType.Family,
-            DisplayName = cmd.FullName,
-            Locale = cmd.Locale,
-            Status = TenantStatus.Active,
-            Metadata = "{}",
-            CreatedAt = DateTime.UtcNow,
-        };
+        // Replace any expired or stale pending registration for this email
+        // (e.g. parent started registration but didn't complete payment previously).
+        var stale = await _db.PendingRegistrations
+            .FirstOrDefaultAsync(p => p.NormalizedEmail == normalized, ct).ConfigureAwait(false);
+        if (stale is not null)
+            _db.PendingRegistrations.Remove(stale);
 
-        var user = new User
+        var pending = new PendingRegistration
         {
             Id = Guid.NewGuid(),
-            TenantId = tenant.Id,
-            AccountType = AccountType.Personal,
+            Nonce = GenerateNonce(),
             Email = cmd.Email.Trim(),
             NormalizedEmail = normalized,
+            PasswordHash = _passwords.Hash(cmd.Password),
             FullName = cmd.FullName.Trim(),
             FullNameEn = cmd.FullNameEn?.Trim(),
+            PhoneNumber = normalizedPhone ?? string.Empty,
             Locale = cmd.Locale,
-            Status = UserStatus.PendingEmailVerification,
-            PasswordHash = _passwords.Hash(cmd.Password),
-            PasswordChangedAt = DateTime.UtcNow,
-            PhoneNumber = normalizedPhone,
+            IpAddress = cmd.IpAddress,
+            UserAgent = cmd.UserAgent,
+            ExpiresAt = DateTime.UtcNow.AddHours(1),
             CreatedAt = DateTime.UtcNow,
         };
-        user.AssertAccountTypeInvariants();
-
-        var parentRole = await FindRoleAsync("parent", ct).ConfigureAwait(false);
-        if (parentRole is null)
-        {
-            return AuthOutcome.Fail(500, "role_missing", "الدور غير موجود.");
-        }
-        var grant = new UserRole
-        {
-            Id = Guid.NewGuid(),
-            UserId = user.Id,
-            RoleId = parentRole.Id,
-            TenantId = tenant.Id,
-            GrantedBy = user.Id,
-            GrantedAt = DateTime.UtcNow,
-        };
-
-        // Parent profile is created atomically with the user + tenant — it
-        // owns notification preferences, child links, and badge state, so
-        // every authenticated parent must have one. The id is fresh; the
-        // legacy IdentityId column is set to the same value (it predates the
-        // Phase 9 UserId FK and is kept non-null for back-compat).
-        var now = DateTime.UtcNow;
-        var parentProfile = new ParentProfile
-        {
-            ParentProfileId = Guid.NewGuid(),
-            TenantId = tenant.Id,
-            IdentityId = user.Id,
-            UserId = user.Id,
-            PreferredLanguage = cmd.Locale == "en" ? "en" : "ar",
-            Locale = cmd.Locale == "en" ? "en-US" : "ar-EG",
-            Timezone = "Africa/Cairo",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.IdentityTenants.Add(tenant);
-        _db.IdentityUsers.Add(user);
-        _db.IdentityUserRoles.Add(grant);
-        _db.ParentProfiles.Add(parentProfile);
+        _db.PendingRegistrations.Add(pending);
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
         {
             EventCategory = AuthEventCategory.Register.ToString(),
-            ActorId = user.Id.ToString("D"),
-            TenantId = tenant.Id.ToString("D"),
-            Action = "register_parent",
-            TargetType = "User",
-            TargetId = user.Id.ToString("D"),
-            Outcome = "succeeded",
+            ActorId = pending.Id.ToString("D"),
+            TenantId = Guid.Empty.ToString("D"),
+            Action = "register_parent_pending",
+            TargetType = "PendingRegistration",
+            TargetId = pending.Id.ToString("D"),
+            Outcome = "pending_payment",
             CorrelationId = cmd.CorrelationId,
         });
 
-        await IssueVerificationAndNotifyAsync(user, cmd.CorrelationId, ct).ConfigureAwait(false);
-
-        // Registration returns a "created" outcome — the user cannot log in
-        // until email is verified, so we do not issue access tokens here.
-        var payload = BuildAuthResponsePlaceholder(user, tenant.Type, new[] { "parent" });
-        return AuthOutcome.Created(payload, "تم إنشاء الحساب. يرجى تأكيد البريد الإلكتروني.");
+        return AuthOutcome.Pending(
+            new PendingRegistrationPayload(pending.Id.ToString("D"), pending.Nonce),
+            "تم قبول بيانات التسجيل. أكمل الدفع لإنشاء حسابك.");
     }
 
     public async Task<AuthOutcome> RegisterSchoolAdminAsync(RegisterSchoolAdminCommand cmd, CancellationToken ct = default)
@@ -651,8 +618,56 @@ public sealed class AuthService : IAuthService
 
     // ── Helpers ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Deletes all records for an incomplete registration (unverified user with no subscription).
+    /// Called when the same email attempts to register again, letting the parent start fresh.
+    /// </summary>
+    public async Task ActivateUserForTenantAsync(Guid tenantId, string correlationId, CancellationToken ct = default)
+    {
+        var user = await _db.IdentityUsers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.TenantId == tenantId, ct).ConfigureAwait(false);
+        if (user is null || user.EmailVerified) return;
+
+        // Payment succeeded — send the verification email now.
+        // Account access is already granted via the JWT from registration;
+        // email verification is for security only and does not block platform use.
+        await IssueVerificationAndNotifyAsync(user, correlationId, ct).ConfigureAwait(false);
+    }
+
+    private async Task PurgeIncompleteRegistrationAsync(User user, CancellationToken ct)
+    {
+        var userId = user.Id;
+        var tenantId = user.TenantId;
+
+        var refreshTokens = await _db.IdentityRefreshTokens.Where(t => t.UserId == userId).ToListAsync(ct).ConfigureAwait(false);
+        if (refreshTokens.Count > 0) _db.IdentityRefreshTokens.RemoveRange(refreshTokens);
+
+        var sessions = await _db.IdentityUserSessions.Where(s => s.UserId == userId).ToListAsync(ct).ConfigureAwait(false);
+        if (sessions.Count > 0) _db.IdentityUserSessions.RemoveRange(sessions);
+
+        var roles = await _db.IdentityUserRoles.Where(r => r.UserId == userId).ToListAsync(ct).ConfigureAwait(false);
+        if (roles.Count > 0) _db.IdentityUserRoles.RemoveRange(roles);
+
+        var profiles = await _db.ParentProfiles.IgnoreQueryFilters().Where(p => p.TenantId == tenantId).ToListAsync(ct).ConfigureAwait(false);
+        if (profiles.Count > 0) _db.ParentProfiles.RemoveRange(profiles);
+
+        _db.IdentityUsers.Remove(user);
+
+        var tenant = await _db.IdentityTenants.IgnoreQueryFilters().FirstOrDefaultAsync(t => t.Id == tenantId, ct).ConfigureAwait(false);
+        if (tenant is not null) _db.IdentityTenants.Remove(tenant);
+
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
     internal static string NormalizeEmail(string email)
         => (email ?? string.Empty).Trim().ToLowerInvariant();
+
+    private static string GenerateNonce()
+    {
+        var bytes = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    }
 
     private Task<Role?> FindRoleAsync(string roleName, CancellationToken ct)
         => _db.IdentityRoles.IgnoreQueryFilters().FirstOrDefaultAsync(r => r.Name == roleName, ct);

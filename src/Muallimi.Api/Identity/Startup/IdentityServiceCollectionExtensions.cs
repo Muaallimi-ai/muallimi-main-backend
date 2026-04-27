@@ -219,6 +219,7 @@ public static class IdentityServiceCollectionExtensions
             _ => new VerificationLinkBuilder(verificationBase));
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IPaymentRegistrationService, PaymentRegistrationService>();
 
         // Command validators
         services.AddScoped<ICommandValidator<RegisterParentCommand>, RegisterParentCommandValidator>();

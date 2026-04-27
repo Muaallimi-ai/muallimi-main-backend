@@ -188,8 +188,11 @@ public sealed class EmailVerificationService : IEmailVerificationService
             // enumerate registered addresses (SC-009 co-principle).
             return new EmailVerificationResult(Success: true);
         }
-        if (user.Status != UserStatus.PendingEmailVerification)
+        // Allow Active users to resend — they were registered via the payment flow
+        // (created directly as Active) and still need to verify their email.
+        if (user.Status != UserStatus.PendingEmailVerification && user.EmailVerified)
         {
+            // Already verified — no need to send again.
             return new EmailVerificationResult(Success: true, UserId: user.Id);
         }
 

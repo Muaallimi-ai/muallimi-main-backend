@@ -12,6 +12,7 @@ using Muallimi.Domain.Review;
 using Muallimi.Domain.Engagement;
 using Muallimi.Domain.Parents;
 using Muallimi.Domain.SaasOperations;
+using Muallimi.Domain.Identity;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.SchoolManagement;
 using Muallimi.Domain.Shared;
@@ -170,6 +171,8 @@ public class MuallimiDbContext : DbContext
     public DbSet<TwoFactorSecret> IdentityTwoFactorSecrets => Set<TwoFactorSecret>();
     public DbSet<ImpersonationSession> IdentityImpersonationSessions => Set<ImpersonationSession>();
     public DbSet<BackfillError> IdentityBackfillErrors => Set<BackfillError>();
+    public DbSet<PendingRegistration> PendingRegistrations => Set<PendingRegistration>();
+    public DbSet<PaymentSessionToken> PaymentSessionTokens => Set<PaymentSessionToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

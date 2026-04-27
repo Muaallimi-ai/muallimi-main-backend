@@ -149,6 +149,7 @@ public sealed class JwtTokenService : ITokenService
         {
             claims.Add(new Claim(JwtRegisteredClaimNames.Email, user.Email));
         }
+        claims.Add(new Claim("email_verified", user.EmailVerified ? "true" : "false"));
         foreach (var role in roleNames)
         {
             claims.Add(new Claim("roles", role));

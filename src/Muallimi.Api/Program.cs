@@ -96,6 +96,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
     options.SerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
+    options.SerializerOptions.PropertyNameCaseInsensitive = true;
 });
 
 // Serilog
@@ -373,8 +374,19 @@ builder.Services.AddScoped<Muallimi.Api.OperatorManagement.LaunchReadinessGate.L
 builder.Services.AddSingleton<Muallimi.Api.Security.DataEncryption.IDataEncryptionAdapter>(sp =>
     Muallimi.Api.Security.DataEncryption.LocalAesGcmEncryptionAdapter.FromConfiguration(
         sp.GetRequiredService<IConfiguration>()));
-builder.Services.AddSingleton<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentProviderAdapter,
-    Muallimi.Api.Payments.LocalPaymentStub.LocalPaymentStub>();
+// Resolves the public backend URL for webhook callbacks (ngrok in dev, App:BackendBaseUrl in prod).
+builder.Services.AddHttpClient<Muallimi.Api.Payments.IPublicUrlResolver,
+    Muallimi.Api.Payments.NgrokPublicUrlResolver>()
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(2));
+
+// Payment providers — add new providers here; no other code changes needed.
+builder.Services.AddHttpClient<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentProviderAdapter,
+    Muallimi.Api.Payments.Paymob.PaymobAdapter>();
+// Direct registration so the dev-fallback verify endpoint can inject PaymobAdapter.
+builder.Services.AddHttpClient<Muallimi.Api.Payments.Paymob.PaymobAdapter>();
+builder.Services.AddSingleton<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentProviderAdapterRegistry>(sp =>
+    new Muallimi.Api.Payments.PaymentProviderAdapter.PaymentProviderAdapterRegistry(
+        sp.GetServices<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentProviderAdapter>()));
 builder.Services.AddHostedService<Muallimi.Api.DownstreamEvents.Phase6OperationalEventDispatcher>();
 builder.Services.AddHostedService<Muallimi.Api.Phase5EventConsumer.Phase5EventConsumer>();
 builder.Services.AddHostedService<Muallimi.Api.OperatorManagement.TenantHealth.TenantHealthViewUpdater>();
@@ -396,8 +408,9 @@ builder.Services.AddScoped<Muallimi.Api.Payments.RefundProcessing.IRefundService
 // ── Phase 6 US7: Payment provider integration extensions (T109–T113) ──
 builder.Services.AddScoped<Muallimi.Api.Payments.PaymentProviderAdapter.IPaymentMethodManagementService,
     Muallimi.Api.Payments.PaymentProviderAdapter.PaymentMethodManagementService>();
+// Webhook signature validators — one per provider, registered in the same order as adapters.
 builder.Services.AddSingleton<Muallimi.Api.Payments.WebhookProcessing.IWebhookSignatureValidator,
-    Muallimi.Api.Payments.WebhookProcessing.LocalStubHmacSignatureValidator>();
+    Muallimi.Api.Payments.Paymob.PaymobWebhookSignatureValidator>();
 builder.Services.AddSingleton<Muallimi.Api.Payments.WebhookProcessing.WebhookSignatureValidatorRegistry>();
 builder.Services.AddScoped<Muallimi.Api.Payments.Idempotency.PaymentIdempotencyService>();
 builder.Services.Configure<Muallimi.Api.Payments.RetryPolicy.PaymentRetryOptions>(_ => { });
@@ -591,6 +604,7 @@ app.MapIdentityEndpoints();
 
 // Phase 6 US1: Billing + Payments endpoints
 Muallimi.Api.Billing.BillingEndpoints.MapBillingEndpoints(app);
+Muallimi.Api.Payments.PaymentInitiateEndpoints.MapPaymentInitiateEndpoints(app);
 Muallimi.Api.Payments.WebhookProcessing.PaymentWebhookEndpoints.MapPaymentWebhooks(app);
 // Phase 6 US5: Compliance (data rights + processing register) endpoints
 Muallimi.Api.Compliance.ComplianceEndpoints.MapComplianceEndpoints(app);

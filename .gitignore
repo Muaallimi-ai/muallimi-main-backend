@@ -4,6 +4,6 @@ obj/
 .vs/
 *.user
 .env
-.env.example
+# .env.example is committed — it's the template with no real values
 appsettings.*.json
 !appsettings.Development.json

@@ -1,6 +1,7 @@
 using System;
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using Muallimi.Domain.Identity;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
 using Muallimi.Domain.Shared;
@@ -235,6 +236,46 @@ public static class IdentityModelConfiguration
             e.Property(x => x.CorrelationId).HasColumnName("correlation_id").HasMaxLength(50);
             e.HasIndex(x => x.ImpersonatorId);
             e.HasIndex(x => x.TargetUserId);
+        });
+
+        // ── PendingRegistration ───────────────────────────────────
+        modelBuilder.Entity<PendingRegistration>(e =>
+        {
+            e.ToTable("identity_pending_registrations");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Nonce).HasColumnName("nonce").HasMaxLength(64).IsRequired();
+            e.Property(x => x.Email).HasColumnName("email").HasMaxLength(320).IsRequired();
+            e.Property(x => x.NormalizedEmail).HasColumnName("normalized_email").HasMaxLength(320).IsRequired();
+            e.Property(x => x.PasswordHash).HasColumnName("password_hash").IsRequired();
+            e.Property(x => x.FullName).HasColumnName("full_name").HasMaxLength(200).IsRequired();
+            e.Property(x => x.FullNameEn).HasColumnName("full_name_en").HasMaxLength(200);
+            e.Property(x => x.PhoneNumber).HasColumnName("phone_number").HasMaxLength(30);
+            e.Property(x => x.Locale).HasColumnName("locale").HasMaxLength(10).IsRequired();
+            e.Property(x => x.PlanId).HasColumnName("plan_id");
+            e.Property(x => x.IpAddress).HasColumnName("ip_address").HasMaxLength(45).IsRequired();
+            e.Property(x => x.UserAgent).HasColumnName("user_agent").HasMaxLength(500);
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => x.NormalizedEmail);
+            e.HasIndex(x => x.ExpiresAt);
+        });
+
+        // ── PaymentSessionToken ───────────────────────────────────
+        modelBuilder.Entity<PaymentSessionToken>(e =>
+        {
+            e.ToTable("identity_payment_session_tokens");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.PendingRegistrationId).HasColumnName("pending_registration_id");
+            e.Property(x => x.Nonce).HasColumnName("nonce").HasMaxLength(64).IsRequired();
+            e.Property(x => x.AccessToken).HasColumnName("access_token").IsRequired();
+            e.Property(x => x.RefreshToken).HasColumnName("refresh_token").IsRequired();
+            e.Property(x => x.Used).HasColumnName("used");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => x.PendingRegistrationId);
+            e.HasIndex(x => x.ExpiresAt);
         });
 
         // ── BackfillError ─────────────────────────────────────────

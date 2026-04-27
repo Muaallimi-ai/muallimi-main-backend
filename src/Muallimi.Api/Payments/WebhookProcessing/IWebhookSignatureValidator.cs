@@ -4,37 +4,15 @@ using System.Text;
 namespace Muallimi.Api.Payments.WebhookProcessing;
 
 /// <summary>
-/// T110 — Webhook signature validation abstraction. Each provider supplies its
-/// own validator: the local stub uses HMAC-SHA256 over the raw body with a
-/// shared secret; production providers (e.g. Stripe, Paymob) implement their
-/// scheme's timestamp-scoped signature format. The registry picks the
-/// validator by provider name; a missing match hard-rejects the webhook.
+/// T110 — Webhook signature validation abstraction. Each payment provider
+/// supplies its own validator implementation. The registry picks the correct
+/// validator by provider name; an unregistered provider hard-rejects.
+/// Add a new provider: implement this interface + register in DI.
 /// </summary>
 public interface IWebhookSignatureValidator
 {
     string ProviderName { get; }
     bool Validate(string body, IDictionary<string, string> headers, string secret);
-}
-
-/// <summary>
-/// HMAC-SHA256(body, secret) compared in constant time against the
-/// X-Provider-Signature header. Used by LocalPaymentStub and any custom
-/// provider that adopts the same envelope.
-/// </summary>
-public sealed class LocalStubHmacSignatureValidator : IWebhookSignatureValidator
-{
-    public string ProviderName => "local_stub";
-
-    public bool Validate(string body, IDictionary<string, string> headers, string secret)
-    {
-        if (!headers.TryGetValue("X-Provider-Signature", out var signatureHex) || string.IsNullOrEmpty(signatureHex))
-            return false;
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var computed = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computed),
-            Encoding.UTF8.GetBytes(signatureHex.ToLowerInvariant()));
-    }
 }
 
 /// <summary>
