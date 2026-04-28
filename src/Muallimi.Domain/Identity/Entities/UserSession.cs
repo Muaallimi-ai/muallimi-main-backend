@@ -21,6 +21,15 @@ public class UserSession
     public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
     public DateTime? RevokedAt { get; set; }
 
+    /// <summary>
+    /// When set, this session was minted via parent profile-switch
+    /// (POST /api/parent/switch-to-child). The value is the parent
+    /// session id. Cascade-revocation queries this column to kill
+    /// derived child sessions when the parent logs out or rotates
+    /// their password.
+    /// </summary>
+    public Guid? DerivedFromSessionId { get; set; }
+
     public bool IsActive => RevokedAt is null;
 
     public void Touch()

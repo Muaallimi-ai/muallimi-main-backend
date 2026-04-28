@@ -37,6 +37,7 @@ public interface IAuthService
     Task<AuthOutcome> RegisterParentAsync(RegisterParentCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> RegisterSchoolAdminAsync(RegisterSchoolAdminCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> LoginAsync(LoginCommand cmd, CancellationToken ct = default);
+    Task<AuthOutcome> LoginWithPinAsync(PinLoginCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> RefreshAsync(RefreshTokenCommand cmd, CancellationToken ct = default);
     Task<AuthOutcome> LogoutAsync(LogoutCommand cmd, CancellationToken ct = default);
 
@@ -98,6 +99,12 @@ public sealed class AuthService : IAuthService
 {
     public const int LockoutThreshold = 5;
     public static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Add-child redesign security non-negotiable #3: tighter PIN
+    /// lockout (3 attempts, parent-only unlock).
+    /// </summary>
+    public const int PinLockoutThreshold = 3;
     public static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(7);
 
     private readonly MuallimiDbContext _db;
@@ -112,6 +119,8 @@ public sealed class AuthService : IAuthService
     private readonly ITwoFactorManagementService? _twoFactor;
     private readonly IUnusualLoginDetector? _unusualLoginDetector;
     private readonly IProfileIdsResolver _profileIds;
+    private readonly ISessionCascadeService _sessionCascade;
+    private readonly ISubscriptionGuard _subscriptionGuard;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -125,6 +134,8 @@ public sealed class AuthService : IAuthService
         IEmailVerificationService verification,
         IVerificationLinkBuilder linkBuilder,
         IProfileIdsResolver profileIds,
+        ISessionCascadeService sessionCascade,
+        ISubscriptionGuard subscriptionGuard,
         ILogger<AuthService> logger,
         ITwoFactorManagementService? twoFactor = null,
         IUnusualLoginDetector? unusualLoginDetector = null)
@@ -139,6 +150,8 @@ public sealed class AuthService : IAuthService
         _verification = verification;
         _linkBuilder = linkBuilder;
         _profileIds = profileIds;
+        _sessionCascade = sessionCascade;
+        _subscriptionGuard = subscriptionGuard;
         _twoFactor = twoFactor;
         _unusualLoginDetector = unusualLoginDetector;
         _logger = logger;
@@ -359,6 +372,16 @@ public sealed class AuthService : IAuthService
         {
             return AuthOutcome.Fail(401, "invalid_credentials", "البريد الإلكتروني أو كلمة المرور غير صحيحة.");
         }
+
+        // Add-child redesign Phase 7.3: block-on-login when the Family
+        // tenant's subscription is expired/cancelled. Active sessions
+        // are unaffected — this gate only fires at entry points.
+        var subGate = await _subscriptionGuard.CheckActiveAsync(user.TenantId, ct).ConfigureAwait(false);
+        if (!subGate.Allowed)
+        {
+            return AuthOutcome.Fail(402, "subscription_expired", "الاشتراك منتهٍ. يرجى تجديد الاشتراك للمتابعة.");
+        }
+
         if (user.TwoFactorEnabled)
         {
             if (string.IsNullOrWhiteSpace(cmd.TwoFactorCode))
@@ -380,6 +403,77 @@ public sealed class AuthService : IAuthService
                     return AuthOutcome.Fail(401, "invalid_totp", "رمز التحقق بخطوتين غير صحيح.");
                 }
             }
+        }
+
+        return await CompleteLoginAsync(user, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId, ct)
+            .ConfigureAwait(false);
+    }
+
+    // ── Child PIN login (8–12 age tier) ────────────────────────────────
+
+    public async Task<AuthOutcome> LoginWithPinAsync(PinLoginCommand cmd, CancellationToken ct = default)
+    {
+        // Add-child redesign security non-negotiable #3: PIN tier is
+        // limited to 3/min/IP (matching the login-method tier above)
+        // because the PIN keyspace is tiny and brute force is cheap.
+        var ipRl = await _rateLimit.IncrementAndCheckAsync("login-pin-ip", cmd.IpAddress, 3, TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+        if (!ipRl.Allowed)
+        {
+            return AuthOutcome.Fail(429, "rate_limited", "تم تجاوز عدد محاولات الدخول.");
+        }
+
+        var username = cmd.Username.Trim().ToLowerInvariant();
+        var user = await _db.IdentityUsers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.NormalizedUsername == username, ct).ConfigureAwait(false);
+
+        var pinValid = _passwords.VerifyWithDummyFallback(cmd.Pin, user?.PinHash);
+
+        if (user is null
+            || user.AccountType != AccountType.Managed
+            || user.LoginMethod != "pin"
+            || !pinValid)
+        {
+            if (user is not null && user.LoginMethod == "pin")
+            {
+                user.RegisterFailedPinLogin(PinLockoutThreshold);
+                if (user.Status == UserStatus.Locked)
+                {
+                    _audit.Emit(new AuditEvent
+                    {
+                        EventCategory = AuthEventCategory.Login.ToString(),
+                        ActorId = user.Id.ToString("D"),
+                        TenantId = user.TenantId.ToString("D"),
+                        Action = "pin_login_locked",
+                        TargetType = "User",
+                        TargetId = user.Id.ToString("D"),
+                        Outcome = "succeeded",
+                        CorrelationId = cmd.CorrelationId,
+                    });
+                }
+                await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            return AuthOutcome.Fail(401, "invalid_credentials", "اسم المستخدم أو رمز PIN غير صحيح.");
+        }
+
+        // PIN lockout is permanent (LockoutEnd is null) — parent unlocks.
+        if (user.Status == UserStatus.Locked)
+        {
+            return AuthOutcome.Fail(423, "account_locked", "الحساب مقفل. اطلب من ولي الأمر فك القفل.");
+        }
+
+        // Phase 7.3: block-on-login subscription gate.
+        var subGate = await _subscriptionGuard.CheckActiveAsync(user.TenantId, ct).ConfigureAwait(false);
+        if (!subGate.Allowed)
+        {
+            return AuthOutcome.Fail(402, "subscription_expired", "الاشتراك منتهٍ. يرجى تجديد الاشتراك للمتابعة.");
+        }
+        if (user.Status == UserStatus.Suspended)
+        {
+            return AuthOutcome.Fail(403, "account_suspended", "الحساب معلّق.");
+        }
+        if (user.Status == UserStatus.Archived)
+        {
+            return AuthOutcome.Fail(401, "invalid_credentials", "اسم المستخدم أو رمز PIN غير صحيح.");
         }
 
         return await CompleteLoginAsync(user, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId, ct)
@@ -419,7 +513,27 @@ public sealed class AuthService : IAuthService
             DeviceType: DeviceType.Unknown), ct).ConfigureAwait(false);
 
         var profileIds = await _profileIds.ResolveAsync(user.Id, user.TenantId, ct).ConfigureAwait(false);
-        var access = _tokens.GenerateAccessToken(user, tenant.Type, roleNames, session.Id, profileIds: profileIds);
+
+        // Add-child redesign: surface the child's visual identity (emoji +
+        // background) in the JWT so the topbar can render the actual
+        // avatar instead of the generic letter initial.
+        string? avatarEmoji = null;
+        string? avatarBg = null;
+        if (user.AccountType == AccountType.Managed)
+        {
+            var profile = await _db.StudentProfiles.IgnoreQueryFilters()
+                .Where(p => p.UserId == user.Id)
+                .Select(p => new { p.AvatarReference, p.AvatarBgColor })
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            avatarEmoji = profile?.AvatarReference;
+            avatarBg = profile?.AvatarBgColor;
+        }
+
+        var access = _tokens.GenerateAccessToken(
+            user, tenant.Type, roleNames, session.Id,
+            profileIds: profileIds,
+            avatarEmoji: avatarEmoji,
+            avatarBgColor: avatarBg);
         var refresh = _tokens.GenerateRefreshToken();
         _db.IdentityRefreshTokens.Add(new RefreshToken
         {
@@ -544,6 +658,13 @@ public sealed class AuthService : IAuthService
             return AuthOutcome.Fail(403, "account_suspended", "الحساب معلّق.");
         }
 
+        // Phase 7.3: block-on-login subscription gate.
+        var subGate = await _subscriptionGuard.CheckActiveAsync(user.TenantId, ct).ConfigureAwait(false);
+        if (!subGate.Allowed)
+        {
+            return AuthOutcome.Fail(402, "subscription_expired", "الاشتراك منتهٍ. يرجى تجديد الاشتراك للمتابعة.");
+        }
+
         var tenant = await _db.IdentityTenants.IgnoreQueryFilters()
             .FirstAsync(t => t.Id == user.TenantId, ct).ConfigureAwait(false);
         var roles = await ResolveActiveRolesAsync(user.Id, ct).ConfigureAwait(false);
@@ -565,7 +686,26 @@ public sealed class AuthService : IAuthService
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         var profileIds = await _profileIds.ResolveAsync(user.Id, user.TenantId, ct).ConfigureAwait(false);
-        var access = _tokens.GenerateAccessToken(user, tenant.Type, roles, token.SessionId, profileIds: profileIds);
+
+        // Refresh path: re-emit the avatar claims for Managed users so
+        // a refreshed token keeps the topbar's child avatar visible.
+        string? refreshAvatarEmoji = null;
+        string? refreshAvatarBg = null;
+        if (user.AccountType == AccountType.Managed)
+        {
+            var profile = await _db.StudentProfiles.IgnoreQueryFilters()
+                .Where(p => p.UserId == user.Id)
+                .Select(p => new { p.AvatarReference, p.AvatarBgColor })
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            refreshAvatarEmoji = profile?.AvatarReference;
+            refreshAvatarBg = profile?.AvatarBgColor;
+        }
+
+        var access = _tokens.GenerateAccessToken(
+            user, tenant.Type, roles, token.SessionId,
+            profileIds: profileIds,
+            avatarEmoji: refreshAvatarEmoji,
+            avatarBgColor: refreshAvatarBg);
 
         _audit.Emit(new AuditEvent
         {
@@ -600,6 +740,9 @@ public sealed class AuthService : IAuthService
         }
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
         await _sessions.RevokeAsync(cmd.SessionId, ct).ConfigureAwait(false);
+
+        // Add-child redesign: parent logout cascades to derived child sessions.
+        await _sessionCascade.RevokeDerivedFromAsync(cmd.SessionId, ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
         {

@@ -30,10 +30,9 @@ public class ParentRevokesChildSessionTests
         var mgmt = BuildService(h);
 
         // Create a managed child.
-        var child = await mgmt.CreateChildAsync(new CreateChildCommand(
-            parentId, tenantId, "نواف", null, 6, "male",
-            new DateTime(2015, 5, 20), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var child = await mgmt.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId, parentTenantId: tenantId, fullName: "نواف",
+            grade: 6, gender: "male", birthYear: 2015, birthMonth: 5));
         Assert.True(child.Success);
         var childId = Guid.Parse(child.Payload!.UserId);
 
@@ -85,10 +84,9 @@ public class ParentRevokesChildSessionTests
         var (parentB, tenantB) = await RegisterAndVerifyParentAsync(h, "pB-rcs@example.com");
         var mgmt = BuildService(h);
 
-        var child = await mgmt.CreateChildAsync(new CreateChildCommand(
-            parentA, tenantA, "ولد", null, 4, "male",
-            new DateTime(2016, 1, 1), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var child = await mgmt.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentA, parentTenantId: tenantA, fullName: "ولد",
+            grade: 4, gender: "male", birthYear: 2016, birthMonth: 1));
         var childId = Guid.Parse(child.Payload!.UserId);
 
         var session = await h.Sessions.CreateAsync(new CreateSessionInput(
@@ -109,10 +107,9 @@ public class ParentRevokesChildSessionTests
         var (parentId, tenantId) = await RegisterAndVerifyParentAsync(h, "pr-sus@example.com");
         var mgmt = BuildService(h);
 
-        var child = await mgmt.CreateChildAsync(new CreateChildCommand(
-            parentId, tenantId, "بسام", null, 5, "male",
-            new DateTime(2015, 3, 10), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var child = await mgmt.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId, parentTenantId: tenantId, fullName: "بسام",
+            grade: 5, gender: "male", birthYear: 2015, birthMonth: 3));
         Assert.True(child.Success);
         var childId = Guid.Parse(child.Payload!.UserId);
         var childUsername = child.Payload.Username;
@@ -141,26 +138,9 @@ public class ParentRevokesChildSessionTests
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private static async Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
         IdentityTestHarness h, string email)
-    {
-        var outcome = await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            Email: email,
-            Password: "HorseBatteryStaple!77",
-            FullName: "الوالد",
-            FullNameEn: null,
-            Locale: "ar",
-            AcceptedTerms: true,
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D")));
-        Assert.True(outcome.Success);
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.NormalizedEmail == email.ToLowerInvariant());
-        user.VerifyEmail();
-        await h.Db.SaveChangesAsync();
-        return (user.Id, user.TenantId);
-    }
+        => h.SeedVerifiedParentAsync(email);
 
     private static UserManagementService BuildService(IdentityTestHarness h)
         => new(
@@ -170,5 +150,6 @@ public class ParentRevokesChildSessionTests
             new ChildPasswordGenerator(new Random(88)),
             h.Audit.Emitter,
             h.Notifications,
-            NullLogger<UserManagementService>.Instance);
+            NullLogger<UserManagementService>.Instance,
+            new WeakPinBlocklist());
 }

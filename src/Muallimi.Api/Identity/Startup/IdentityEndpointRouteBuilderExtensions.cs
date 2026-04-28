@@ -48,6 +48,9 @@ public static class IdentityEndpointRouteBuilderExtensions
         // US2: parent-children management.
         group.MapParentChildrenEndpoints();
 
+        // Add-child redesign Phase 4: parent profile-switch endpoints.
+        group.MapParentSwitchEndpoints();
+
         // US3: admin user management + forced-rotation gate + invitation accept.
         group.MapAdminUserEndpoints();
 

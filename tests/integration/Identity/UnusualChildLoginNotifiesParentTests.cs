@@ -32,10 +32,9 @@ public class UnusualChildLoginNotifiesParentTests
         var (parentId, tenantId) = await RegisterAndVerifyParentAsync(h, "p-unusual@example.com");
         var mgmt = BuildMgmt(h);
 
-        var child = await mgmt.CreateChildAsync(new CreateChildCommand(
-            parentId, tenantId, "تميم", null, 7, "male",
-            new DateTime(2014, 6, 1), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var child = await mgmt.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId, parentTenantId: tenantId, fullName: "تميم",
+            grade: 7, gender: "male", birthYear: 2014, birthMonth: 6));
         Assert.True(child.Success);
         var username = child.Payload!.Username;
         var password = child.Payload.GeneratedPassword;
@@ -71,10 +70,9 @@ public class UnusualChildLoginNotifiesParentTests
         var (parentId, tenantId) = await RegisterAndVerifyParentAsync(h, "p-same-subnet@example.com");
         var mgmt = BuildMgmt(h);
 
-        var child = await mgmt.CreateChildAsync(new CreateChildCommand(
-            parentId, tenantId, "غازي", null, 5, "male",
-            new DateTime(2016, 9, 9), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var child = await mgmt.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId, parentTenantId: tenantId, fullName: "غازي",
+            grade: 5, gender: "male", birthYear: 2016, birthMonth: 9));
         var username = child.Payload!.Username;
         var password = child.Payload.GeneratedPassword;
 
@@ -129,36 +127,22 @@ public class UnusualChildLoginNotifiesParentTests
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private static async Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
         IdentityTestHarness h, string email)
-    {
-        var outcome = await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            Email: email,
-            Password: "HorseBatteryStaple!77",
-            FullName: "ولي الأمر",
-            FullNameEn: null,
-            Locale: "ar",
-            AcceptedTerms: true,
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D")));
-        Assert.True(outcome.Success);
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.NormalizedEmail == email.ToLowerInvariant());
-        user.VerifyEmail();
-        await h.Db.SaveChangesAsync();
-        return (user.Id, user.TenantId);
-    }
+        => h.SeedVerifiedParentAsync(email);
 
     private static UserManagementService BuildMgmt(IdentityTestHarness h)
         => new(h.Db, h.Passwords,
             new UsernameGenerator(new Random(77)),
             new ChildPasswordGenerator(new Random(66)),
             h.Audit.Emitter, h.Notifications,
-            NullLogger<UserManagementService>.Instance);
+            NullLogger<UserManagementService>.Instance,
+            new WeakPinBlocklist());
 
     private static AuthService BuildAuthWithDetector(IdentityTestHarness h, UnusualLoginDetector detector)
-        => new(
+    {
+        var sessionCache = new Muallimi.Infrastructure.Identity.Adapters.InMemorySessionActivityCache();
+        return new AuthService(
             h.Db, h.Passwords, h.Tokens,
             new NullRateLimitService(),
             h.Sessions, h.Audit.Emitter, h.Notifications,
@@ -169,7 +153,10 @@ public class UnusualChildLoginNotifiesParentTests
                 {
                     new Muallimi.Api.Identity.Services.StudentProfileIdContributor(h.Db),
                 }),
+            new SessionCascadeService(h.Db, sessionCache),
+            new SubscriptionGuard(h.Db),
             NullLogger<AuthService>.Instance,
             twoFactor: null,
             unusualLoginDetector: detector);
+    }
 }

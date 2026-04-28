@@ -150,6 +150,7 @@ public static class IdentityServiceCollectionExtensions
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddSingleton<ITwoFactorService, TotpTwoFactorService>();
         services.AddSingleton<IPasswordStrengthValidator, ZxcvbnPasswordStrengthValidator>();
+        services.AddSingleton<IWeakPinBlocklist, WeakPinBlocklist>();
 
         // ── profile_ids claim resolution (generalized 1:1 profile map) ─
         // Every 1:1 domain profile that is keyed to a User registers one
@@ -218,6 +219,8 @@ public static class IdentityServiceCollectionExtensions
         services.AddSingleton<IVerificationLinkBuilder>(
             _ => new VerificationLinkBuilder(verificationBase));
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.AddScoped<ISessionCascadeService, SessionCascadeService>();
+        services.AddScoped<ISubscriptionGuard, SubscriptionGuard>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IPaymentRegistrationService, PaymentRegistrationService>();
 
@@ -243,6 +246,8 @@ public static class IdentityServiceCollectionExtensions
         services.AddScoped<ICommandValidator<SuspendChildCommand>, SuspendChildCommandValidator>();
         services.AddScoped<ICommandValidator<UnsuspendChildCommand>, UnsuspendChildCommandValidator>();
         services.AddScoped<ICommandValidator<RevokeChildSessionCommand>, RevokeChildSessionCommandValidator>();
+        services.AddScoped<ICommandValidator<UnlockChildCommand>, UnlockChildCommandValidator>();
+        services.AddScoped<ICommandValidator<ChangePinCommand>, ChangePinCommandValidator>();
         services.AddScoped<IUnusualLoginDetector, UnusualLoginDetector>();
 
         // US3: admin user management + audit log + forced-rotation gate (T108–T114)

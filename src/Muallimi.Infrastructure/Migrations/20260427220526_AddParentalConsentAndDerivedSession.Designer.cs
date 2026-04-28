@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muallimi.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace Muallimi.Infrastructure.Migrations
 {
     [DbContext(typeof(MuallimiDbContext))]
-    partial class MuallimiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260427220526_AddParentalConsentAndDerivedSession")]
+    partial class AddParentalConsentAndDerivedSession
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

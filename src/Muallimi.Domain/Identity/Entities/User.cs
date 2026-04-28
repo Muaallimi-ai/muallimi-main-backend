@@ -37,6 +37,16 @@ public class User : ITenantScoped
     public DateTime? PasswordChangedAt { get; set; }
     public bool RequiresPasswordReset { get; set; }
 
+    /// <summary>
+    /// Credential method for Managed (child) accounts.
+    /// "username_password" (12+), "pin" (8–12), "avatar_only" (&lt;8).
+    /// Null for Personal accounts.
+    /// </summary>
+    public string? LoginMethod { get; set; }
+
+    /// <summary>Hashed 4-digit PIN. Set only when LoginMethod = "pin".</summary>
+    public string? PinHash { get; set; }
+
     public bool TwoFactorEnabled { get; set; }
     public string Locale { get; set; } = "ar";
 
@@ -99,6 +109,23 @@ public class User : ITenantScoped
         {
             Status = UserStatus.Locked;
             LockoutEnd = DateTime.UtcNow.Add(lockoutDuration);
+        }
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Add-child redesign security non-negotiable #3: PIN lockout is
+    /// permanent (LockoutEnd = null) — parent must unlock via
+    /// <c>POST /api/parent/children/{id}/unlock</c>. There is no
+    /// time-based auto-recovery on PIN like there is on password.
+    /// </summary>
+    public void RegisterFailedPinLogin(int lockoutThreshold)
+    {
+        FailedLoginAttempts += 1;
+        if (FailedLoginAttempts >= lockoutThreshold && Status == UserStatus.Active)
+        {
+            Status = UserStatus.Locked;
+            LockoutEnd = null;
         }
         UpdatedAt = DateTime.UtcNow;
     }

@@ -171,6 +171,7 @@ public class MuallimiDbContext : DbContext
     public DbSet<TwoFactorSecret> IdentityTwoFactorSecrets => Set<TwoFactorSecret>();
     public DbSet<ImpersonationSession> IdentityImpersonationSessions => Set<ImpersonationSession>();
     public DbSet<BackfillError> IdentityBackfillErrors => Set<BackfillError>();
+    public DbSet<ParentalConsent> IdentityParentalConsents => Set<ParentalConsent>();
     public DbSet<PendingRegistration> PendingRegistrations => Set<PendingRegistration>();
     public DbSet<PaymentSessionToken> PaymentSessionTokens => Set<PaymentSessionToken>();
 
@@ -638,6 +639,7 @@ public class MuallimiDbContext : DbContext
     {
         ApplyTenantFilter<User>(modelBuilder);
         ApplyTenantFilter<UserRole>(modelBuilder);
+        ApplyTenantFilter<ParentalConsent>(modelBuilder);
     }
 
     private static void ConfigurePhase3(ModelBuilder modelBuilder)

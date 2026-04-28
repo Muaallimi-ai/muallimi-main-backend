@@ -26,44 +26,26 @@ public class ParentCreatesChildTests
         using var h = await IdentityTestHarness.CreateAsync();
 
         var parentEmail = "parent-e2e@example.com";
-        var regOutcome = await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            Email: parentEmail,
-            Password: "HorseBatteryStaple!77",
-            FullName: "ولي الأمر",
-            FullNameEn: null,
-            Locale: "ar",
-            AcceptedTerms: true,
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D")));
-        Assert.True(regOutcome.Success);
-
+        var (parentId, parentTenantId) = await h.SeedVerifiedParentAsync(parentEmail);
         var parent = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.NormalizedEmail == parentEmail);
-        parent.VerifyEmail();
-        await h.Db.SaveChangesAsync();
+            .SingleAsync(u => u.Id == parentId);
 
         var svc = new UserManagementService(
             h.Db, h.Passwords,
             new UsernameGenerator(new Random(7)),
             new ChildPasswordGenerator(new Random(7)),
             h.Audit.Emitter, h.Notifications,
-            NullLogger<UserManagementService>.Instance);
+            NullLogger<UserManagementService>.Instance,
+            new WeakPinBlocklist());
 
-        var created = await svc.CreateChildAsync(new CreateChildCommand(
-            ParentUserId: parent.Id,
-            ParentTenantId: parent.TenantId,
-            FullName: "الطفل",
-            FullNameEn: "Child",
-            Grade: 3,
-            Gender: "male",
-            Birthday: new DateTime(2018, 6, 1),
-            PreferredUsername: null,
-            CustomPassword: null,
-            PasswordLocale: "ar",
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D")));
+        var created = await svc.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parent.Id,
+            parentTenantId: parent.TenantId,
+            fullName: "الطفل",
+            grade: 3,
+            gender: "male",
+            birthYear: 2018,
+            birthMonth: 6));
         Assert.True(created.Success);
         var childUsername = created.Payload!.Username;
         var childPassword = created.Payload.GeneratedPassword;

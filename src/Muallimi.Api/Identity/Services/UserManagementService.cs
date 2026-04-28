@@ -37,6 +37,9 @@ public interface IUserManagementService
     Task<ChildOperationResult<ChildCredentialsOnce>> RegenerateChildPasswordAsync(RegenerateChildPasswordCommand cmd, CancellationToken ct = default);
     Task<ChildOperationResult<object>> DeleteChildAsync(DeleteChildCommand cmd, CancellationToken ct = default);
 
+    /// <summary>Add-child redesign Phase 6: parent-only unlock for a Locked child (post-PIN-failure).</summary>
+    Task<ChildOperationResult<object>> UnlockChildAsync(UnlockChildCommand cmd, CancellationToken ct = default);
+
     // US5 — Parent oversight
     Task<ChildOperationResult<object>> SuspendChildAsync(SuspendChildCommand cmd, CancellationToken ct = default);
     Task<ChildOperationResult<object>> UnsuspendChildAsync(UnsuspendChildCommand cmd, CancellationToken ct = default);
@@ -74,6 +77,7 @@ public sealed class UserManagementService : IUserManagementService
     private readonly AuditEventEmitter _audit;
     private readonly IIdentityNotificationSender _notifications;
     private readonly ILogger<UserManagementService> _logger;
+    private readonly IWeakPinBlocklist _weakPinBlocklist;
 
     public UserManagementService(
         MuallimiDbContext db,
@@ -82,7 +86,8 @@ public sealed class UserManagementService : IUserManagementService
         IChildPasswordGenerator passwordGenerator,
         AuditEventEmitter audit,
         IIdentityNotificationSender notifications,
-        ILogger<UserManagementService> logger)
+        ILogger<UserManagementService> logger,
+        IWeakPinBlocklist weakPinBlocklist)
     {
         _db = db;
         _passwords = passwords;
@@ -91,6 +96,7 @@ public sealed class UserManagementService : IUserManagementService
         _audit = audit;
         _notifications = notifications;
         _logger = logger;
+        _weakPinBlocklist = weakPinBlocklist;
     }
 
     public async Task<ChildOperationResult<ChildCredentialsOnce>> CreateChildAsync(CreateChildCommand cmd, CancellationToken ct = default)
@@ -111,7 +117,7 @@ public sealed class UserManagementService : IUserManagementService
         {
             username = await _usernameGenerator.GenerateAsync(
                 cmd.FullName,
-                cmd.Birthday.Year,
+                cmd.BirthYear,
                 cmd.PreferredUsername,
                 async (candidate, c) =>
                 {
@@ -126,9 +132,41 @@ public sealed class UserManagementService : IUserManagementService
             return ChildOperationResult<ChildCredentialsOnce>.Fail(409, "username_unavailable", "اسم المستخدم غير متاح.");
         }
 
-        var plaintextPassword = string.IsNullOrEmpty(cmd.CustomPassword)
-            ? _passwordGenerator.Generate(cmd.PasswordLocale)
-            : cmd.CustomPassword;
+        // Resolve credentials per login method. Only username_password
+        // ever returns a plaintext password to surface in the success
+        // screen (and only when parent did NOT supply a custom one).
+        string? passwordHash = null;
+        string? pinHash = null;
+        string? plaintextPasswordToReturn = null;
+        switch (cmd.LoginMethod)
+        {
+            case "profile_switch_only":
+                // No credential at all. Under-8 children are accessed
+                // exclusively via parent profile-switch.
+                break;
+            case "pin":
+                if (_weakPinBlocklist.IsWeak(cmd.Pin!, cmd.BirthYear))
+                {
+                    return ChildOperationResult<ChildCredentialsOnce>.Fail(422, "pin_too_weak", "رمز PIN ضعيف. اختر رمزًا أصعب.");
+                }
+                pinHash = _passwords.Hash(cmd.Pin!);
+                break;
+            case "username_password":
+                if (string.IsNullOrEmpty(cmd.CustomPassword))
+                {
+                    // English wordlist — ASCII-only so the password is safe
+                    // through every JSON / display / clipboard path. Arabic
+                    // (used to be the default here) tripped up the success
+                    // screen render in some environments.
+                    plaintextPasswordToReturn = _passwordGenerator.Generate("en");
+                    passwordHash = _passwords.Hash(plaintextPasswordToReturn);
+                }
+                else
+                {
+                    passwordHash = _passwords.Hash(cmd.CustomPassword);
+                }
+                break;
+        }
 
         var childId = Guid.NewGuid();
         var child = new User
@@ -140,17 +178,19 @@ public sealed class UserManagementService : IUserManagementService
             Username = username,
             NormalizedUsername = username.ToLowerInvariant(),
             FullName = cmd.FullName.Trim(),
-            FullNameEn = cmd.FullNameEn?.Trim(),
             Locale = parent.Locale,
             Status = UserStatus.Active,
-            PasswordHash = _passwords.Hash(plaintextPassword),
-            PasswordChangedAt = DateTime.UtcNow,
+            PasswordHash = passwordHash,
+            PasswordChangedAt = passwordHash is null ? null : DateTime.UtcNow,
+            LoginMethod = cmd.LoginMethod,
+            PinHash = pinHash,
             CreatedAt = DateTime.UtcNow,
             CreatedBy = parent.Id,
         };
         child.AssertAccountTypeInvariants();
 
-        var metadata = BuildChildMetadata(cmd.Grade, cmd.Gender, cmd.Birthday);
+        var birthday = new DateOnly(cmd.BirthYear, cmd.BirthMonth, 1);
+        var metadata = BuildChildMetadata(cmd.Grade, cmd.Gender, birthday);
 
         var studentRole = await _db.IdentityRoles.IgnoreQueryFilters()
             .FirstOrDefaultAsync(r => r.Name == "student", ct).ConfigureAwait(false);
@@ -171,9 +211,6 @@ public sealed class UserManagementService : IUserManagementService
         _db.IdentityUsers.Add(child);
         _db.IdentityUserRoles.Add(grant);
 
-        // Persist grade/gender/birthday on the family-scoped StudentProfile
-        // row so subsequent reads (list/detail) project from the same
-        // source of truth the frontend dialog seeds from.
         var now = DateTime.UtcNow;
         var profile = new StudentProfile
         {
@@ -181,18 +218,38 @@ public sealed class UserManagementService : IUserManagementService
             TenantId = parent.TenantId,
             UserId = child.Id,
             DisplayName = child.FullName,
-            CurriculumType = "MOE-EG",
+            CurriculumType = cmd.CurriculumType,
             Grade = cmd.Grade.ToString(System.Globalization.CultureInfo.InvariantCulture),
             PreferredLanguage = child.Locale,
             PlanTier = "free",
             SubjectsEnrolled = "[]",
             ConsentState = "pending",
-            Birthday = cmd.Birthday == default ? null : DateOnly.FromDateTime(cmd.Birthday),
+            Birthday = birthday,
             Gender = string.IsNullOrWhiteSpace(cmd.Gender) ? null : cmd.Gender,
+            AvatarReference = cmd.AvatarEmoji,
+            AvatarBgColor = cmd.AvatarBgColor,
+            SchoolName = string.IsNullOrWhiteSpace(cmd.SchoolName) ? null : cmd.SchoolName.Trim(),
+            PrefLevel = cmd.PrefLevel,
+            PrefStyles = cmd.PrefStyles,
+            PrefGoal = cmd.PrefGoal,
             CreatedAt = now,
             UpdatedAt = now,
         };
         _db.StudentProfiles.Add(profile);
+
+        // Add-child redesign decision #10: persist explicit parental consent.
+        var consent = new ParentalConsent
+        {
+            Id = Guid.NewGuid(),
+            TenantId = parent.TenantId,
+            ParentUserId = parent.Id,
+            ChildUserId = child.Id,
+            ConsentedAt = now,
+            IpAddress = string.IsNullOrWhiteSpace(cmd.IpAddress) ? null : cmd.IpAddress,
+            IsLegacyAssumed = false,
+            CreatedAt = now,
+        };
+        _db.IdentityParentalConsents.Add(consent);
 
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
@@ -220,7 +277,7 @@ public sealed class UserManagementService : IUserManagementService
                     Locale: parent.Locale),
                 child.FullName,
                 username,
-                plaintextPassword,
+                plaintextPasswordToReturn ?? string.Empty,
                 cmd.CorrelationId,
                 ct).ConfigureAwait(false);
         }
@@ -233,7 +290,8 @@ public sealed class UserManagementService : IUserManagementService
         {
             UserId = child.Id.ToString("D"),
             Username = username,
-            GeneratedPassword = plaintextPassword,
+            LoginMethod = cmd.LoginMethod,
+            GeneratedPassword = plaintextPasswordToReturn,
             FullName = child.FullName,
             Grade = cmd.Grade,
             TenantId = parent.TenantId.ToString("D"),
@@ -270,9 +328,11 @@ public sealed class UserManagementService : IUserManagementService
                 UserId = u.Id.ToString("D"),
                 Username = u.Username ?? string.Empty,
                 FullName = u.FullName,
-                FullNameEn = u.FullNameEn,
                 Grade = ParseGrade(p?.Grade),
-                Gender = p?.Gender ?? string.Empty,
+                Gender = p?.Gender,
+                AvatarEmoji = p?.AvatarReference,
+                AvatarBgColor = p?.AvatarBgColor,
+                LoginMethod = u.LoginMethod,
                 Status = u.Status.ToString().ToLowerInvariant(),
                 LastLoginAt = u.LastLoginAt,
                 CreatedAt = u.CreatedAt,
@@ -316,6 +376,29 @@ public sealed class UserManagementService : IUserManagementService
         {
             child.FullNameEn = string.IsNullOrWhiteSpace(cmd.FullNameEn) ? null : cmd.FullNameEn.Trim();
         }
+
+        // Add-child redesign decision #5: parent-driven username change.
+        // Re-check global uniqueness, then revoke ALL child sessions
+        // (access + refresh) so any cached login on another device dies.
+        var usernameChanged = false;
+        if (!string.IsNullOrWhiteSpace(cmd.Username))
+        {
+            var nu = cmd.Username.Trim();
+            var nuLower = nu.ToLowerInvariant();
+            if (child.NormalizedUsername != nuLower)
+            {
+                var clash = await _db.IdentityUsers.IgnoreQueryFilters()
+                    .AnyAsync(u => u.NormalizedUsername == nuLower && u.Id != child.Id, ct).ConfigureAwait(false);
+                if (clash)
+                {
+                    return ChildOperationResult<ChildDetail>.Fail(409, "username_unavailable", "اسم المستخدم غير متاح.");
+                }
+                child.Username = nu;
+                child.NormalizedUsername = nuLower;
+                usernameChanged = true;
+            }
+        }
+
         child.UpdatedAt = DateTime.UtcNow;
 
         // Patch-style update of the StudentProfile; only persist fields
@@ -366,6 +449,37 @@ public sealed class UserManagementService : IUserManagementService
 
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
+        if (usernameChanged)
+        {
+            // Revoke ALL child sessions (access + refresh).
+            var sessions = await _db.IdentityUserSessions.IgnoreQueryFilters()
+                .Where(s => s.UserId == child.Id && s.RevokedAt == null)
+                .ToListAsync(ct).ConfigureAwait(false);
+            foreach (var s in sessions) s.Revoke();
+
+            var sessionIds = sessions.Select(s => s.Id).ToList();
+            if (sessionIds.Count > 0)
+            {
+                var refresh = await _db.IdentityRefreshTokens.IgnoreQueryFilters()
+                    .Where(t => sessionIds.Contains(t.SessionId) && t.RevokedAt == null)
+                    .ToListAsync(ct).ConfigureAwait(false);
+                foreach (var t in refresh) t.MarkFamilyRevoked();
+            }
+            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            _audit.Emit(new AuditEvent
+            {
+                EventCategory = AuthEventCategory.SessionRevoked.ToString(),
+                ActorId = cmd.ParentUserId.ToString("D"),
+                TenantId = cmd.ParentTenantId.ToString("D"),
+                Action = "child_username_changed",
+                TargetType = "User",
+                TargetId = child.Id.ToString("D"),
+                Outcome = "succeeded",
+                CorrelationId = cmd.CorrelationId,
+            });
+        }
+
         _audit.Emit(new AuditEvent
         {
             EventCategory = AuthEventCategory.Register.ToString(),
@@ -376,7 +490,12 @@ public sealed class UserManagementService : IUserManagementService
             TargetId = child.Id.ToString("D"),
             Outcome = "succeeded",
             CorrelationId = cmd.CorrelationId,
-            Reason = BuildChildMetadata(cmd.Grade, cmd.Gender, cmd.Birthday),
+            Reason = BuildChildMetadata(
+                cmd.Grade,
+                cmd.Gender,
+                cmd.Birthday.HasValue && cmd.Birthday.Value != default
+                    ? DateOnly.FromDateTime(cmd.Birthday.Value)
+                    : (DateOnly?)null),
         });
 
         return ChildOperationResult<ChildDetail>.Ok(BuildChildDetail(child, profile), "تم تحديث بيانات الطفل.");
@@ -539,6 +658,52 @@ public sealed class UserManagementService : IUserManagementService
         return ChildOperationResult<object>.Ok(new { suspended = false }, "تم إعادة تفعيل الحساب.");
     }
 
+    public async Task<ChildOperationResult<object>> UnlockChildAsync(UnlockChildCommand cmd, CancellationToken ct = default)
+    {
+        // Verify the parent password — defense in depth on top of JWT auth.
+        var parent = await _db.IdentityUsers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.Id == cmd.ParentUserId, ct).ConfigureAwait(false);
+        if (parent is null || string.IsNullOrEmpty(parent.PasswordHash))
+        {
+            return ChildOperationResult<object>.Fail(401, "invalid_parent_password", "كلمة مرور ولي الأمر غير صحيحة.");
+        }
+        if (!_passwords.VerifyWithDummyFallback(cmd.ParentPassword, parent.PasswordHash))
+        {
+            return ChildOperationResult<object>.Fail(401, "invalid_parent_password", "كلمة مرور ولي الأمر غير صحيحة.");
+        }
+
+        var child = await FindOwnedChildAsync(cmd.ParentUserId, cmd.ChildUserId, ct).ConfigureAwait(false);
+        if (child is null)
+            return ChildOperationResult<object>.Fail(404, "child_not_found", "الطفل غير موجود.");
+        if (child.Status == UserStatus.Archived)
+            return ChildOperationResult<object>.Fail(409, "child_archived", "الحساب محذوف.");
+
+        if (child.Status != UserStatus.Locked)
+        {
+            return ChildOperationResult<object>.Ok(new { locked = false }, "الحساب غير مقفل.");
+        }
+
+        child.Status = UserStatus.Active;
+        child.FailedLoginAttempts = 0;
+        child.LockoutEnd = null;
+        child.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        _audit.Emit(new AuditEvent
+        {
+            EventCategory = AuthEventCategory.AccountUnsuspended.ToString(),
+            ActorId = cmd.ParentUserId.ToString("D"),
+            TenantId = cmd.ParentTenantId.ToString("D"),
+            Action = "child_account_unlocked",
+            TargetType = "User",
+            TargetId = child.Id.ToString("D"),
+            Outcome = "succeeded",
+            CorrelationId = cmd.CorrelationId,
+        });
+
+        return ChildOperationResult<object>.Ok(new { locked = false }, "تم فك قفل الحساب.");
+    }
+
     public async Task<IReadOnlyList<ChildSessionSummary>> ListChildSessionsAsync(
         Guid parentUserId, Guid childUserId, CancellationToken ct = default)
     {
@@ -644,10 +809,18 @@ public sealed class UserManagementService : IUserManagementService
             UserId = child.Id.ToString("D"),
             Username = child.Username ?? string.Empty,
             FullName = child.FullName,
-            FullNameEn = child.FullNameEn,
             Grade = ParseGrade(profile?.Grade),
-            Gender = profile?.Gender ?? string.Empty,
-            Birthday = profile?.Birthday is { } d ? d.ToDateTime(TimeOnly.MinValue) : DateTime.MinValue,
+            Gender = profile?.Gender,
+            BirthYear = profile?.Birthday?.Year,
+            BirthMonth = profile?.Birthday?.Month,
+            CurriculumType = profile?.CurriculumType,
+            SchoolName = profile?.SchoolName,
+            AvatarEmoji = profile?.AvatarReference,
+            AvatarBgColor = profile?.AvatarBgColor,
+            PrefLevel = profile?.PrefLevel,
+            PrefStyles = profile?.PrefStyles,
+            PrefGoal = profile?.PrefGoal,
+            LoginMethod = child.LoginMethod,
             Status = child.Status.ToString().ToLowerInvariant(),
             Locale = child.Locale,
             LastLoginAt = child.LastLoginAt,
@@ -666,7 +839,7 @@ public sealed class UserManagementService : IUserManagementService
             : 0;
     }
 
-    private static string BuildChildMetadata(int? grade, string? gender, DateTime? birthday)
+    private static string BuildChildMetadata(int? grade, string? gender, DateOnly? birthday)
     {
         var parts = new List<string>();
         if (grade.HasValue) parts.Add($"\"grade\":{grade.Value}");

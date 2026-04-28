@@ -14,13 +14,25 @@ public sealed record CreateChildCommand(
     Guid ParentUserId,
     Guid ParentTenantId,
     string FullName,
-    string? FullNameEn,
     int Grade,
-    string Gender,
-    DateTime Birthday,
-    string? PreferredUsername,
-    string? CustomPassword,
-    string PasswordLocale,
+    string? Gender,
+    int BirthYear,
+    int BirthMonth,
+    string CurriculumType,
+    string? SchoolName,
+    // Avatar
+    string AvatarEmoji,
+    string AvatarBgColor,
+    // Learning preferences (all optional — step may be skipped)
+    string? PrefLevel,
+    string? PrefStyles,
+    string? PrefGoal,
+    // Login method
+    string LoginMethod,          // "profile_switch_only" | "pin" | "username_password"
+    string? Pin,                 // plain 4-digit, hashed by service; only for "pin"
+    string? PreferredUsername,   // only for "username_password"
+    string? CustomPassword,      // only for "username_password"
+    bool ParentalConsentAcknowledged, // explicit checkbox in step 6
     string IpAddress,
     string? UserAgent,
     string CorrelationId);
@@ -34,6 +46,24 @@ public sealed record UpdateChildCommand(
     int? Grade,
     string? Gender,
     DateTime? Birthday,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId,
+    string? Username = null);
+
+public sealed record UnlockChildCommand(
+    Guid ParentUserId,
+    Guid ParentTenantId,
+    Guid ChildUserId,
+    string ParentPassword,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
+public sealed record ChangePinCommand(
+    Guid ChildUserId,
+    string CurrentPin,
+    string NewPin,
     string IpAddress,
     string? UserAgent,
     string CorrelationId);
@@ -67,37 +97,62 @@ public sealed class CreateChildCommandValidator : ICommandValidator<CreateChildC
         else if (c.FullName.Length > ValidationRules.MaxFullNameLength)
             errors.Add(new ApiResponseError { Code = "full_name_length", Field = "fullName", Message = "الاسم طويل جدًا." });
 
-        // Accept KG1 (-1), KG2 (0), and Grades 1..12 inclusive.
+        // KG1 (-1), KG2 (0), Grades 1..12 inclusive.
         if (c.Grade is < -1 or > 12)
             errors.Add(new ApiResponseError { Code = "grade_invalid", Field = "grade", Message = "الصف الدراسي غير صالح." });
 
-        if (c.Gender is not ("male" or "female"))
+        if (c.Gender is not null && c.Gender is not ("male" or "female"))
             errors.Add(new ApiResponseError { Code = "gender_invalid", Field = "gender", Message = "الجنس غير صالح." });
 
-        var today = DateTime.UtcNow.Date;
-        if (c.Birthday == default)
-            errors.Add(new ApiResponseError { Code = "birthday_required", Field = "birthday", Message = "تاريخ الميلاد مطلوب." });
-        else if (c.Birthday.Date >= today)
-            errors.Add(new ApiResponseError { Code = "birthday_invalid", Field = "birthday", Message = "تاريخ الميلاد غير صالح." });
-        else if (c.Birthday.Year < today.Year - 25)
-            errors.Add(new ApiResponseError { Code = "birthday_invalid", Field = "birthday", Message = "تاريخ الميلاد غير صالح." });
+        var today = DateTime.UtcNow;
+        if (c.BirthYear < today.Year - 25 || c.BirthYear > today.Year)
+            errors.Add(new ApiResponseError { Code = "birth_year_invalid", Field = "birthYear", Message = "سنة الميلاد غير صالحة." });
+        if (c.BirthMonth is < 1 or > 12)
+            errors.Add(new ApiResponseError { Code = "birth_month_invalid", Field = "birthMonth", Message = "شهر الميلاد غير صالح." });
 
-        if (c.PasswordLocale is not ("ar" or "en"))
-            errors.Add(new ApiResponseError { Code = "password_locale_invalid", Field = "passwordLocale", Message = "لغة كلمة المرور غير مدعومة." });
+        if (c.CurriculumType is not ("Moe" or "LanguageSchool" or "International"))
+            errors.Add(new ApiResponseError { Code = "curriculum_type_invalid", Field = "curriculumType", Message = "النظام التعليمي غير صالح." });
 
-        if (!string.IsNullOrWhiteSpace(c.PreferredUsername))
+        if (string.IsNullOrWhiteSpace(c.AvatarEmoji))
+            errors.Add(new ApiResponseError { Code = "avatar_required", Field = "avatarEmoji", Message = "الصورة الرمزية مطلوبة." });
+        if (string.IsNullOrWhiteSpace(c.AvatarBgColor) || !System.Text.RegularExpressions.Regex.IsMatch(c.AvatarBgColor, "^#[0-9a-fA-F]{6}$"))
+            errors.Add(new ApiResponseError { Code = "avatar_bg_color_invalid", Field = "avatarBgColor", Message = "لون الخلفية غير صالح." });
+
+        if (c.PrefLevel is not null && c.PrefLevel is not ("beginner" or "intermediate" or "advanced"))
+            errors.Add(new ApiResponseError { Code = "pref_level_invalid", Field = "prefLevel", Message = "المستوى غير صالح." });
+        if (c.PrefGoal is not null && c.PrefGoal is not ("improve_level" or "excel" or "review_support"))
+            errors.Add(new ApiResponseError { Code = "pref_goal_invalid", Field = "prefGoal", Message = "الهدف غير صالح." });
+
+        if (!c.ParentalConsentAcknowledged)
+            errors.Add(new ApiResponseError { Code = "parental_consent_required", Field = "parentalConsentAcknowledged", Message = "يجب الموافقة على شروط الخصوصية لحساب الطفل." });
+
+        if (c.LoginMethod is not ("profile_switch_only" or "pin" or "username_password"))
         {
-            var u = c.PreferredUsername.Trim();
-            if (u.Length < 3 || u.Length > 50)
-                errors.Add(new ApiResponseError { Code = "username_length", Field = "preferredUsername", Message = "اسم المستخدم يجب أن يتراوح بين 3 و50 حرفًا." });
-            else if (!System.Text.RegularExpressions.Regex.IsMatch(u, "^[a-z0-9._-]+$"))
-                errors.Add(new ApiResponseError { Code = "username_format", Field = "preferredUsername", Message = "اسم المستخدم يجب أن يحتوي على أحرف إنجليزية صغيرة وأرقام فقط." });
+            errors.Add(new ApiResponseError { Code = "login_method_invalid", Field = "loginMethod", Message = "طريقة تسجيل الدخول غير صالحة." });
+            return errors;
         }
 
-        if (!string.IsNullOrEmpty(c.CustomPassword))
+        if (c.LoginMethod == "pin")
         {
-            if (c.CustomPassword.Length < ValidationRules.MinPasswordLength || c.CustomPassword.Length > ValidationRules.MaxPasswordLength)
-                errors.Add(new ApiResponseError { Code = "password_length", Field = "customPassword", Message = $"كلمة المرور يجب أن تتراوح بين {ValidationRules.MinPasswordLength} و{ValidationRules.MaxPasswordLength} حرفًا." });
+            if (string.IsNullOrWhiteSpace(c.Pin) || !System.Text.RegularExpressions.Regex.IsMatch(c.Pin, "^[0-9]{4}$"))
+                errors.Add(new ApiResponseError { Code = "pin_invalid", Field = "pin", Message = "رمز PIN يجب أن يكون 4 أرقام." });
+        }
+
+        if (c.LoginMethod == "username_password")
+        {
+            if (!string.IsNullOrWhiteSpace(c.PreferredUsername))
+            {
+                var u = c.PreferredUsername.Trim();
+                if (u.Length < 4 || u.Length > 20)
+                    errors.Add(new ApiResponseError { Code = "username_length", Field = "preferredUsername", Message = "اسم المستخدم يجب أن يتراوح بين 4 و20 حرفًا." });
+                else if (!System.Text.RegularExpressions.Regex.IsMatch(u, "^[a-zA-Z0-9_]+$"))
+                    errors.Add(new ApiResponseError { Code = "username_format", Field = "preferredUsername", Message = "اسم المستخدم يجب أن يحتوي على أحرف إنجليزية وأرقام وشرطة سفلية فقط." });
+            }
+            if (!string.IsNullOrEmpty(c.CustomPassword))
+            {
+                if (c.CustomPassword.Length < ValidationRules.MinPasswordLength || c.CustomPassword.Length > ValidationRules.MaxPasswordLength)
+                    errors.Add(new ApiResponseError { Code = "password_length", Field = "customPassword", Message = $"كلمة المرور يجب أن تتراوح بين {ValidationRules.MinPasswordLength} و{ValidationRules.MaxPasswordLength} حرفًا." });
+            }
         }
 
         return errors;
@@ -132,6 +187,43 @@ public sealed class UpdateChildCommandValidator : ICommandValidator<UpdateChildC
             && (bd.Date >= today || bd.Year < today.Year - 25))
             errors.Add(new ApiResponseError { Code = "birthday_invalid", Field = "birthday", Message = "تاريخ الميلاد غير صالح." });
 
+        // Add-child redesign decision #5: parent can change child's username
+        // post-creation. Same regex as create-time (4–20 chars, [a-zA-Z0-9_]).
+        if (!string.IsNullOrWhiteSpace(c.Username))
+        {
+            var u = c.Username.Trim();
+            if (u.Length < 4 || u.Length > 20)
+                errors.Add(new ApiResponseError { Code = "username_length", Field = "username", Message = "اسم المستخدم يجب أن يتراوح بين 4 و20 حرفًا." });
+            else if (!System.Text.RegularExpressions.Regex.IsMatch(u, "^[a-zA-Z0-9_]+$"))
+                errors.Add(new ApiResponseError { Code = "username_format", Field = "username", Message = "اسم المستخدم يجب أن يحتوي على أحرف إنجليزية وأرقام وشرطة سفلية فقط." });
+        }
+
+        return errors;
+    }
+}
+
+public sealed class UnlockChildCommandValidator : ICommandValidator<UnlockChildCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(UnlockChildCommand c)
+    {
+        var errors = new List<ApiResponseError>();
+        if (c.ChildUserId == Guid.Empty)
+            errors.Add(new ApiResponseError { Code = "child_id_required", Field = "id", Message = "معرّف الطفل مطلوب." });
+        if (string.IsNullOrEmpty(c.ParentPassword))
+            errors.Add(new ApiResponseError { Code = "parent_password_required", Field = "parentPassword", Message = "كلمة مرور ولي الأمر مطلوبة." });
+        return errors;
+    }
+}
+
+public sealed class ChangePinCommandValidator : ICommandValidator<ChangePinCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(ChangePinCommand c)
+    {
+        var errors = new List<ApiResponseError>();
+        if (string.IsNullOrEmpty(c.CurrentPin) || !System.Text.RegularExpressions.Regex.IsMatch(c.CurrentPin, "^[0-9]{4}$"))
+            errors.Add(new ApiResponseError { Code = "current_pin_invalid", Field = "currentPin", Message = "رمز PIN الحالي يجب أن يكون 4 أرقام." });
+        if (string.IsNullOrEmpty(c.NewPin) || !System.Text.RegularExpressions.Regex.IsMatch(c.NewPin, "^[0-9]{4}$"))
+            errors.Add(new ApiResponseError { Code = "new_pin_invalid", Field = "newPin", Message = "رمز PIN الجديد يجب أن يكون 4 أرقام." });
         return errors;
     }
 }

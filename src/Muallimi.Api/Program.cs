@@ -571,6 +571,12 @@ app.UseIdentitySecurityHeaders();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseIdentityTenantResolution();
+// Add-child redesign Phase 5.4: keep parent session alive while
+// any derived child session is actively making requests.
+app.UseDerivedSessionKeepalive();
+// Add-child redesign Phase 7: child-scope JWTs are blocked from
+// parent-only path prefixes (billing, parent dashboard, etc.).
+app.UseScopeEnforcement();
 app.UseImpersonationContext();
 
 app.UseCorrelationId();

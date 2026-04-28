@@ -190,34 +190,16 @@ public class ParentOversightContractTests
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private static async Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
         IdentityTestHarness h, string email)
-    {
-        var outcome = await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            Email: email,
-            Password: "HorseBatteryStaple!77",
-            FullName: "ولي الأمر",
-            FullNameEn: null,
-            Locale: "ar",
-            AcceptedTerms: true,
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D")));
-        Assert.True(outcome.Success);
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.NormalizedEmail == email.ToLowerInvariant());
-        user.VerifyEmail();
-        await h.Db.SaveChangesAsync();
-        return (user.Id, user.TenantId);
-    }
+        => h.SeedVerifiedParentAsync(email);
 
     private static async Task<ChildCredentialsOnce> CreateChildAsync(
         UserManagementService svc, Guid parentId, Guid tenantId, string name)
     {
-        var result = await svc.CreateChildAsync(new CreateChildCommand(
-            parentId, tenantId, name, null, 5, "male",
-            new DateTime(2015, 1, 1), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var result = await svc.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId, parentTenantId: tenantId, fullName: name,
+            grade: 5, gender: "male", birthYear: 2015, birthMonth: 1));
         Assert.True(result.Success);
         return result.Payload!;
     }
@@ -230,7 +212,8 @@ public class ParentOversightContractTests
             new ChildPasswordGenerator(new Random(2)),
             h.Audit.Emitter,
             h.Notifications,
-            NullLogger<UserManagementService>.Instance);
+            NullLogger<UserManagementService>.Instance,
+            new WeakPinBlocklist());
 
     private static string[] JsonNames(Type t)
         => t.GetProperties(BindingFlags.Public | BindingFlags.Instance)

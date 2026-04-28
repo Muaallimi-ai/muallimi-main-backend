@@ -34,7 +34,8 @@ public sealed record CreateSessionInput(
     string IpAddress,
     string? UserAgent,
     string? DeviceName,
-    DeviceType DeviceType);
+    DeviceType DeviceType,
+    Guid? DerivedFromSessionId = null);
 
 /// <summary>
 /// Repository surface the session service needs from the Infrastructure
@@ -85,6 +86,7 @@ public sealed class SessionService : ISessionService
             UserAgent = input.UserAgent,
             CreatedAt = DateTime.UtcNow,
             LastSeenAt = DateTime.UtcNow,
+            DerivedFromSessionId = input.DerivedFromSessionId,
         };
         await _repository.AddAsync(session, ct).ConfigureAwait(false);
         await _repository.SaveChangesAsync(ct).ConfigureAwait(false);

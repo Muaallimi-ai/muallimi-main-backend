@@ -155,7 +155,9 @@ public static class IdentityModelConfiguration
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.LastSeenAt).HasColumnName("last_seen_at");
             e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            e.Property(x => x.DerivedFromSessionId).HasColumnName("derived_from_session_id");
             e.HasIndex(x => new { x.UserId, x.RevokedAt });
+            e.HasIndex(x => x.DerivedFromSessionId);
         });
 
         // ── LoginAttempt ──────────────────────────────────────────
@@ -290,6 +292,23 @@ public static class IdentityModelConfiguration
             e.Property(x => x.Detail).HasColumnName("detail").HasMaxLength(2000);
             e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
             e.HasIndex(x => x.LegacyUserId);
+        });
+
+        // ── ParentalConsent (add-child redesign decision #10) ─────
+        modelBuilder.Entity<ParentalConsent>(e =>
+        {
+            e.ToTable("parental_consents");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id");
+            e.Property(x => x.ParentUserId).HasColumnName("parent_user_id");
+            e.Property(x => x.ChildUserId).HasColumnName("child_user_id");
+            e.Property(x => x.ConsentedAt).HasColumnName("consented_at");
+            e.Property(x => x.IpAddress).HasColumnName("ip_address").HasMaxLength(45);
+            e.Property(x => x.IsLegacyAssumed).HasColumnName("is_legacy_assumed");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => x.TenantId);
+            e.HasIndex(x => new { x.ParentUserId, x.ChildUserId }).IsUnique();
         });
     }
 }

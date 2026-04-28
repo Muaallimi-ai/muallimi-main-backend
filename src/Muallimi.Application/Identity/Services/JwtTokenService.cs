@@ -36,7 +36,11 @@ public interface ITokenService
         IReadOnlyCollection<string> roleNames,
         Guid sessionId,
         ImpersonationClaim? impersonation = null,
-        IReadOnlyDictionary<string, Guid>? profileIds = null);
+        IReadOnlyDictionary<string, Guid>? profileIds = null,
+        Guid? derivedFromSessionId = null,
+        TimeSpan? overrideLifetime = null,
+        string? avatarEmoji = null,
+        string? avatarBgColor = null);
 
     (string token, string hash) GenerateRefreshToken();
 
@@ -130,10 +134,23 @@ public sealed class JwtTokenService : ITokenService
         IReadOnlyCollection<string> roleNames,
         Guid sessionId,
         ImpersonationClaim? impersonation = null,
-        IReadOnlyDictionary<string, Guid>? profileIds = null)
+        IReadOnlyDictionary<string, Guid>? profileIds = null,
+        Guid? derivedFromSessionId = null,
+        TimeSpan? overrideLifetime = null,
+        string? avatarEmoji = null,
+        string? avatarBgColor = null)
     {
         var now = DateTime.UtcNow;
-        var expires = now.AddMinutes(_options.AccessTokenMinutes);
+        var expires = overrideLifetime is { } life
+            ? now.Add(life)
+            : now.AddMinutes(_options.AccessTokenMinutes);
+
+        // Add-child redesign: scope distinguishes parent surfaces
+        // (billing, dashboards) from child surfaces (student lessons).
+        // RequireScope filter consults this claim.
+        var scope = user.AccountType == Muallimi.Domain.Identity.Enums.AccountType.Managed
+            ? "child"
+            : "parent";
 
         var claims = new List<Claim>
         {
@@ -143,8 +160,25 @@ public sealed class JwtTokenService : ITokenService
             new("tenant_type", tenantType.ToString().ToLowerInvariant()),
             new("locale", user.Locale),
             new("session_id", sessionId.ToString("D")),
+            new("scope", scope),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
         };
+        if (derivedFromSessionId is { } derivedId)
+        {
+            claims.Add(new Claim("derived_from_session_id", derivedId.ToString("D")));
+        }
+        // Add-child redesign: child accounts carry their visual identity
+        // (the emoji + background colour the parent picked) as JWT claims
+        // so the topbar can render the actual avatar — visually different
+        // from a parent session — without an extra fetch.
+        if (!string.IsNullOrWhiteSpace(avatarEmoji))
+        {
+            claims.Add(new Claim("avatar_emoji", avatarEmoji));
+        }
+        if (!string.IsNullOrWhiteSpace(avatarBgColor))
+        {
+            claims.Add(new Claim("avatar_bg_color", avatarBgColor));
+        }
         if (!string.IsNullOrWhiteSpace(user.Email))
         {
             claims.Add(new Claim(JwtRegisteredClaimNames.Email, user.Email));

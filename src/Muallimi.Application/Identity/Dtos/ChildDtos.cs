@@ -24,14 +24,20 @@ public sealed class ChildSummary
     [JsonPropertyName("fullName")]
     public string FullName { get; set; } = string.Empty;
 
-    [JsonPropertyName("fullNameEn")]
-    public string? FullNameEn { get; set; }
-
     [JsonPropertyName("grade")]
     public int Grade { get; set; }
 
     [JsonPropertyName("gender")]
-    public string Gender { get; set; } = string.Empty;
+    public string? Gender { get; set; }
+
+    [JsonPropertyName("avatarEmoji")]
+    public string? AvatarEmoji { get; set; }
+
+    [JsonPropertyName("avatarBgColor")]
+    public string? AvatarBgColor { get; set; }
+
+    [JsonPropertyName("loginMethod")]
+    public string? LoginMethod { get; set; }
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
@@ -54,17 +60,41 @@ public sealed class ChildDetail
     [JsonPropertyName("fullName")]
     public string FullName { get; set; } = string.Empty;
 
-    [JsonPropertyName("fullNameEn")]
-    public string? FullNameEn { get; set; }
-
     [JsonPropertyName("grade")]
     public int Grade { get; set; }
 
     [JsonPropertyName("gender")]
-    public string Gender { get; set; } = string.Empty;
+    public string? Gender { get; set; }
 
-    [JsonPropertyName("birthday")]
-    public DateTime Birthday { get; set; }
+    [JsonPropertyName("birthYear")]
+    public int? BirthYear { get; set; }
+
+    [JsonPropertyName("birthMonth")]
+    public int? BirthMonth { get; set; }
+
+    [JsonPropertyName("curriculumType")]
+    public string? CurriculumType { get; set; }
+
+    [JsonPropertyName("schoolName")]
+    public string? SchoolName { get; set; }
+
+    [JsonPropertyName("avatarEmoji")]
+    public string? AvatarEmoji { get; set; }
+
+    [JsonPropertyName("avatarBgColor")]
+    public string? AvatarBgColor { get; set; }
+
+    [JsonPropertyName("prefLevel")]
+    public string? PrefLevel { get; set; }
+
+    [JsonPropertyName("prefStyles")]
+    public string? PrefStyles { get; set; }
+
+    [JsonPropertyName("prefGoal")]
+    public string? PrefGoal { get; set; }
+
+    [JsonPropertyName("loginMethod")]
+    public string? LoginMethod { get; set; }
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
@@ -90,10 +120,13 @@ public sealed class ChildDetail
 
 /// <summary>
 /// Returned exclusively by POST /api/auth/parent/children and
-/// POST /api/auth/parent/children/{id}/regenerate-password. The
-/// plaintext password is not stored on the User entity — only the
-/// BCrypt hash is persisted — so this envelope is the single moment
-/// the parent ever sees the generated password.
+/// POST /api/auth/parent/children/{id}/regenerate-password.
+///
+/// In the redesigned add-child flow the parent SETS the credential
+/// in step 5 of the wizard (PIN or username+password), so
+/// <see cref="GeneratedPassword"/> is null when the parent supplied
+/// their own. It is only populated as a fallback for legacy callers
+/// that do not specify a custom password under "username_password".
 /// </summary>
 public sealed class ChildCredentialsOnce
 {
@@ -103,8 +136,16 @@ public sealed class ChildCredentialsOnce
     [JsonPropertyName("username")]
     public string Username { get; set; } = string.Empty;
 
+    /// <summary>"avatar_only" | "pin" | "username_password".</summary>
+    [JsonPropertyName("loginMethod")]
+    public string LoginMethod { get; set; } = "username_password";
+
+    /// <summary>
+    /// Plaintext password — populated only for username_password method
+    /// when the parent did NOT supply a custom password (server generated).
+    /// </summary>
     [JsonPropertyName("generatedPassword")]
-    public string GeneratedPassword { get; set; } = string.Empty;
+    public string? GeneratedPassword { get; set; }
 
     [JsonPropertyName("fullName")]
     public string FullName { get; set; } = string.Empty;
@@ -119,23 +160,51 @@ public sealed class ChildCredentialsOnce
     public DateTime CreatedAt { get; set; }
 }
 
-/// <summary>Wire body for POST /api/auth/parent/children.</summary>
+/// <summary>Wire body for POST /api/auth/parent/children — six-step add-child flow.</summary>
 public sealed class CreateChildRequest
 {
     [JsonPropertyName("fullName")]
     public string FullName { get; set; } = string.Empty;
 
-    [JsonPropertyName("fullNameEn")]
-    public string? FullNameEn { get; set; }
-
     [JsonPropertyName("grade")]
     public int Grade { get; set; }
 
     [JsonPropertyName("gender")]
-    public string Gender { get; set; } = string.Empty;
+    public string? Gender { get; set; }
 
-    [JsonPropertyName("birthday")]
-    public DateTime Birthday { get; set; }
+    [JsonPropertyName("birthYear")]
+    public int BirthYear { get; set; }
+
+    [JsonPropertyName("birthMonth")]
+    public int BirthMonth { get; set; }
+
+    [JsonPropertyName("curriculumType")]
+    public string CurriculumType { get; set; } = "Moe";
+
+    [JsonPropertyName("schoolName")]
+    public string? SchoolName { get; set; }
+
+    [JsonPropertyName("avatarEmoji")]
+    public string AvatarEmoji { get; set; } = string.Empty;
+
+    [JsonPropertyName("avatarBgColor")]
+    public string AvatarBgColor { get; set; } = string.Empty;
+
+    [JsonPropertyName("prefLevel")]
+    public string? PrefLevel { get; set; }
+
+    /// <summary>JSON-stringified array, e.g. <c>["videos","exercises"]</c>.</summary>
+    [JsonPropertyName("prefStyles")]
+    public string? PrefStyles { get; set; }
+
+    [JsonPropertyName("prefGoal")]
+    public string? PrefGoal { get; set; }
+
+    [JsonPropertyName("loginMethod")]
+    public string LoginMethod { get; set; } = "username_password";
+
+    [JsonPropertyName("pin")]
+    public string? Pin { get; set; }
 
     [JsonPropertyName("preferredUsername")]
     public string? PreferredUsername { get; set; }
@@ -143,8 +212,13 @@ public sealed class CreateChildRequest
     [JsonPropertyName("customPassword")]
     public string? CustomPassword { get; set; }
 
-    [JsonPropertyName("passwordLocale")]
-    public string? PasswordLocale { get; set; }
+    /// <summary>
+    /// Step 6 explicit consent checkbox. Must be <c>true</c> for the
+    /// command to validate (see <c>CreateChildCommandValidator</c>).
+    /// Persisted as a <c>ParentalConsent</c> row keyed by parent+child.
+    /// </summary>
+    [JsonPropertyName("parentalConsentAcknowledged")]
+    public bool ParentalConsentAcknowledged { get; set; }
 }
 
 /// <summary>Wire body for PATCH /api/auth/parent/children/{id}.</summary>
@@ -164,6 +238,30 @@ public sealed class UpdateChildRequest
 
     [JsonPropertyName("birthday")]
     public DateTime? Birthday { get; set; }
+
+    /// <summary>
+    /// Optional username change. Re-checked for global uniqueness; if
+    /// accepted, ALL child sessions are revoked (access + refresh).
+    /// </summary>
+    [JsonPropertyName("username")]
+    public string? Username { get; set; }
+}
+
+/// <summary>Wire body for POST /api/auth/parent/children/{id}/unlock.</summary>
+public sealed class UnlockChildRequest
+{
+    [JsonPropertyName("parentPassword")]
+    public string ParentPassword { get; set; } = string.Empty;
+}
+
+/// <summary>Wire body for POST /api/auth/change-pin (8-12 child tier).</summary>
+public sealed class ChangePinRequest
+{
+    [JsonPropertyName("currentPin")]
+    public string CurrentPin { get; set; } = string.Empty;
+
+    [JsonPropertyName("newPin")]
+    public string NewPin { get; set; } = string.Empty;
 }
 
 /// <summary>

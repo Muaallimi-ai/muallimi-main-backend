@@ -94,26 +94,14 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent1@example.com");
         var svc = BuildUserManagementService(h);
 
-        var cmd = new CreateChildCommand(
-            ParentUserId: parentId,
-            ParentTenantId: parentTenantId,
-            FullName: "علي محمد",
-            FullNameEn: "Ali Mohamed",
-            Grade: 6,
-            Gender: "male",
-            Birthday: new DateTime(2015, 3, 14),
-            PreferredUsername: null,
-            CustomPassword: null,
-            PasswordLocale: "ar",
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit-test",
-            CorrelationId: Guid.NewGuid().ToString("D"));
+        var cmd = NewCreateCmd(parentId, parentTenantId, "علي محمد",
+            grade: 6, gender: "male", birthYear: 2015, birthMonth: 3);
         var result = await svc.CreateChildAsync(cmd);
         Assert.True(result.Success);
         Assert.Equal(201, result.HttpStatus);
         Assert.NotNull(result.Payload);
         Assert.False(string.IsNullOrEmpty(result.Payload!.GeneratedPassword));
-        Assert.StartsWith("aly.2015.", result.Payload.Username);
+        Assert.StartsWith("aly", result.Payload.Username);
 
         var child = await h.Db.IdentityUsers.IgnoreQueryFilters()
             .SingleAsync(u => u.AccountType == AccountType.Managed);
@@ -138,23 +126,12 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent2@example.com");
         var svc = BuildUserManagementService(h);
 
-        var cmd = new CreateChildCommand(
-            ParentUserId: parentId,
-            ParentTenantId: parentTenantId,
-            FullName: "سارة أحمد",
-            FullNameEn: null,
-            Grade: 4,
-            Gender: "female",
-            Birthday: new DateTime(2017, 8, 2),
-            PreferredUsername: "sara.custom",
-            CustomPassword: "TopSecret-123!",
-            PasswordLocale: "en",
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit-test",
-            CorrelationId: Guid.NewGuid().ToString("D"));
+        var cmd = NewCreateCmd(parentId, parentTenantId, "سارة أحمد",
+            grade: 4, gender: "female", birthYear: 2017, birthMonth: 8,
+            preferredUsername: "sara_custom", customPassword: "TopSecret-123!");
         var result = await svc.CreateChildAsync(cmd);
         Assert.True(result.Success);
-        Assert.Equal("sara.custom", result.Payload!.Username);
+        Assert.Equal("sara_custom", result.Payload!.Username);
         Assert.Equal("TopSecret-123!", result.Payload.GeneratedPassword);
     }
 
@@ -165,12 +142,8 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent3@example.com");
         var svc = BuildUserManagementService(h);
 
-        var baseCmd = new CreateChildCommand(
-            parentId, parentTenantId,
-            "خالد", null, 5, "male",
-            new DateTime(2016, 1, 1),
-            "khaled.custom", null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D"));
+        var baseCmd = NewCreateCmd(parentId, parentTenantId, "خالد",
+            grade: 5, birthYear: 2016, birthMonth: 1, preferredUsername: "khaled_custom");
         var first = await svc.CreateChildAsync(baseCmd);
         Assert.True(first.Success);
 
@@ -215,9 +188,13 @@ public class ParentChildrenContractTests
         var firstPassword = created.Payload.GeneratedPassword;
 
         var regen = await svc.RegenerateChildPasswordAsync(new RegenerateChildPasswordCommand(
-            parentId, parentTenantId, childId,
-            CustomPassword: null, PasswordLocale: "ar",
-            IpAddress: "127.0.0.1", UserAgent: null,
+            ParentUserId: parentId,
+            ParentTenantId: parentTenantId,
+            ChildUserId: childId,
+            CustomPassword: null,
+            PasswordLocale: "ar",
+            IpAddress: "127.0.0.1",
+            UserAgent: null,
             CorrelationId: Guid.NewGuid().ToString("D")));
         Assert.True(regen.Success);
         Assert.NotEqual(firstPassword, regen.Payload!.GeneratedPassword);
@@ -235,11 +212,16 @@ public class ParentChildrenContractTests
         var childId = Guid.Parse(created.Payload!.UserId);
 
         var update = await svc.UpdateChildAsync(new UpdateChildCommand(
-            parentId, parentTenantId, childId,
+            ParentUserId: parentId,
+            ParentTenantId: parentTenantId,
+            ChildUserId: childId,
             FullName: "حسن المحدّث",
             FullNameEn: "Hassan Updated",
-            Grade: 7, Gender: null, Birthday: null,
-            IpAddress: "127.0.0.1", UserAgent: null,
+            Grade: 7,
+            Gender: null,
+            Birthday: null,
+            IpAddress: "127.0.0.1",
+            UserAgent: null,
             CorrelationId: Guid.NewGuid().ToString("D")));
         Assert.True(update.Success);
         Assert.Equal("حسن المحدّث", update.Payload!.FullName);
@@ -273,21 +255,10 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-profile@example.com");
         var svc = BuildUserManagementService(h);
 
-        var birthday = new DateTime(2015, 3, 14);
-        var cmd = new CreateChildCommand(
-            ParentUserId: parentId,
-            ParentTenantId: parentTenantId,
-            FullName: "منى",
-            FullNameEn: null,
-            Grade: 6,
-            Gender: "female",
-            Birthday: birthday,
-            PreferredUsername: null,
-            CustomPassword: null,
-            PasswordLocale: "ar",
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D"));
+        const int birthYear = 2015;
+        const int birthMonth = 3;
+        var cmd = NewCreateCmd(parentId, parentTenantId, "منى",
+            grade: 6, gender: "female", birthYear: birthYear, birthMonth: birthMonth);
         var created = await svc.CreateChildAsync(cmd);
         Assert.True(created.Success);
         var childId = Guid.Parse(created.Payload!.UserId);
@@ -296,7 +267,7 @@ public class ParentChildrenContractTests
             .SingleAsync(p => p.UserId == childId);
         Assert.Equal("6", profile.Grade);
         Assert.Equal("female", profile.Gender);
-        Assert.Equal(DateOnly.FromDateTime(birthday), profile.Birthday);
+        Assert.Equal(new DateOnly(birthYear, birthMonth, 1), profile.Birthday);
         Assert.Equal(parentTenantId, profile.TenantId);
 
         // And the GET read-back projects the real values now, not defaults.
@@ -304,7 +275,8 @@ public class ParentChildrenContractTests
         Assert.NotNull(detail);
         Assert.Equal(6, detail!.Grade);
         Assert.Equal("female", detail.Gender);
-        Assert.Equal(birthday.Date, detail.Birthday.Date);
+        Assert.Equal(birthYear, detail.BirthYear);
+        Assert.Equal(birthMonth, detail.BirthMonth);
 
         var list = await svc.ListChildrenAsync(parentId, parentTenantId);
         var listed = Assert.Single(list);
@@ -319,12 +291,8 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-kg2@example.com");
         var svc = BuildUserManagementService(h);
 
-        var cmd = new CreateChildCommand(
-            parentId, parentTenantId, "روضة", null,
-            Grade: 0, Gender: "male",
-            Birthday: new DateTime(2020, 5, 1),
-            null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D"));
+        var cmd = NewCreateCmd(parentId, parentTenantId, "روضة",
+            grade: 0, gender: "male", birthYear: 2020, birthMonth: 5);
         var created = await svc.CreateChildAsync(cmd);
         Assert.True(created.Success);
         Assert.Equal(0, created.Payload!.Grade);
@@ -347,15 +315,22 @@ public class ParentChildrenContractTests
 
         var newBirthday = new DateTime(2014, 7, 20);
         var update = await svc.UpdateChildAsync(new UpdateChildCommand(
-            parentId, parentTenantId, childId,
-            FullName: null, FullNameEn: null,
-            Grade: 8, Gender: "female", Birthday: newBirthday,
-            IpAddress: "127.0.0.1", UserAgent: null,
+            ParentUserId: parentId,
+            ParentTenantId: parentTenantId,
+            ChildUserId: childId,
+            FullName: null,
+            FullNameEn: null,
+            Grade: 8,
+            Gender: "female",
+            Birthday: newBirthday,
+            IpAddress: "127.0.0.1",
+            UserAgent: null,
             CorrelationId: Guid.NewGuid().ToString("D")));
         Assert.True(update.Success);
         Assert.Equal(8, update.Payload!.Grade);
         Assert.Equal("female", update.Payload.Gender);
-        Assert.Equal(newBirthday.Date, update.Payload.Birthday.Date);
+        Assert.Equal(2014, update.Payload.BirthYear);
+        Assert.Equal(7, update.Payload.BirthMonth);
 
         var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
             .SingleAsync(p => p.UserId == childId);
@@ -371,27 +346,31 @@ public class ParentChildrenContractTests
         var (parentId, parentTenantId) = await RegisterAndVerifyParentAsync(h, "parent-nullbd@example.com");
         var svc = BuildUserManagementService(h);
 
-        var birthday = new DateTime(2016, 2, 2);
-        var created = await svc.CreateChildAsync(new CreateChildCommand(
-            parentId, parentTenantId, "نادر", null,
-            Grade: 4, Gender: "male", Birthday: birthday,
-            null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        const int birthYear = 2016;
+        const int birthMonth = 2;
+        var created = await svc.CreateChildAsync(NewCreateCmd(parentId, parentTenantId, "نادر",
+            grade: 4, gender: "male", birthYear: birthYear, birthMonth: birthMonth));
         var childId = Guid.Parse(created.Payload!.UserId);
 
         // Patch the grade, leave birthday null (typical "edit just grade" flow).
         var update = await svc.UpdateChildAsync(new UpdateChildCommand(
-            parentId, parentTenantId, childId,
-            FullName: null, FullNameEn: null,
-            Grade: 5, Gender: null, Birthday: null,
-            IpAddress: "127.0.0.1", UserAgent: null,
+            ParentUserId: parentId,
+            ParentTenantId: parentTenantId,
+            ChildUserId: childId,
+            FullName: null,
+            FullNameEn: null,
+            Grade: 5,
+            Gender: null,
+            Birthday: null,
+            IpAddress: "127.0.0.1",
+            UserAgent: null,
             CorrelationId: Guid.NewGuid().ToString("D")));
         Assert.True(update.Success);
 
         var profile = await h.Db.StudentProfiles.IgnoreQueryFilters()
             .SingleAsync(p => p.UserId == childId);
         Assert.Equal("5", profile.Grade);
-        Assert.Equal(DateOnly.FromDateTime(birthday), profile.Birthday); // untouched
+        Assert.Equal(new DateOnly(birthYear, birthMonth, 1), profile.Birthday); // untouched
     }
 
     [Fact]
@@ -437,8 +416,9 @@ public class ParentChildrenContractTests
         var detail = await svc.GetChildAsync(parentId, childId);
         Assert.NotNull(detail);
         Assert.Equal(0, detail!.Grade);
-        Assert.Equal(string.Empty, detail.Gender);
-        Assert.Equal(DateTime.MinValue, detail.Birthday);
+        Assert.True(string.IsNullOrEmpty(detail.Gender));
+        Assert.Null(detail.BirthYear);
+        Assert.Null(detail.BirthMonth);
     }
 
     [Fact]
@@ -458,33 +438,27 @@ public class ParentChildrenContractTests
 
     // ── Helpers ─────────────────────────────────────────────────────
 
-    private static CreateChildCommand NewCreateCmd(Guid parentId, Guid tenantId, string name)
-        => new(parentId, tenantId, name, null, 5, "male",
-            new DateTime(2015, 1, 1), null, null, "ar",
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D"));
+    private static CreateChildCommand NewCreateCmd(
+        Guid parentId, Guid tenantId, string name,
+        int grade = 5, string? gender = "male",
+        int birthYear = 2015, int birthMonth = 1,
+        string? preferredUsername = null, string? customPassword = null,
+        string loginMethod = "username_password", string? pin = null)
+        => ChildCommandFixtures.MakeCreateChild(
+            parentUserId: parentId,
+            parentTenantId: tenantId,
+            fullName: name,
+            grade: grade,
+            gender: gender,
+            birthYear: birthYear,
+            birthMonth: birthMonth,
+            loginMethod: loginMethod,
+            pin: pin,
+            preferredUsername: preferredUsername,
+            customPassword: customPassword);
 
-    private static async Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(IdentityTestHarness h, string email)
-    {
-        var cmd = new RegisterParentCommand(
-            Email: email,
-            Password: "HorseBatteryStaple!77",
-            FullName: "الوالد " + email,
-            FullNameEn: null,
-            Locale: "ar",
-            AcceptedTerms: true,
-            IpAddress: "127.0.0.1",
-            UserAgent: "xunit",
-            CorrelationId: Guid.NewGuid().ToString("D"));
-        var outcome = await h.AuthService.RegisterParentAsync(cmd);
-        Assert.True(outcome.Success);
-        var normalized = email.ToLowerInvariant();
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.NormalizedEmail == normalized);
-        // Activate the parent so downstream services see a usable actor.
-        user.VerifyEmail();
-        await h.Db.SaveChangesAsync();
-        return (user.Id, user.TenantId);
-    }
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(IdentityTestHarness h, string email)
+        => h.SeedVerifiedParentAsync(email);
 
     private static UserManagementService BuildUserManagementService(IdentityTestHarness h)
         => new(
@@ -494,7 +468,8 @@ public class ParentChildrenContractTests
             new ChildPasswordGenerator(new Random(4321)),
             h.Audit.Emitter,
             h.Notifications,
-            NullLogger<UserManagementService>.Instance);
+            NullLogger<UserManagementService>.Instance,
+            new WeakPinBlocklist());
 
     private static string[] JsonNames(Type t)
         => t.GetProperties(BindingFlags.Public | BindingFlags.Instance)

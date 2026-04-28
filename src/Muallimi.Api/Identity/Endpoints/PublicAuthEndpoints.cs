@@ -1,11 +1,19 @@
+using System;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
 using Muallimi.Api.Identity.Services;
 using Muallimi.Application.Identity.Commands;
 using Muallimi.Application.Identity.Dtos;
 using Muallimi.Application.Identity.Services;
+using Muallimi.Domain.Identity.Entities;
+using Muallimi.Domain.Identity.Enums;
+using Muallimi.Infrastructure.Persistence;
 
 namespace Muallimi.Api.Identity.Endpoints;
 
@@ -27,6 +35,8 @@ public static class PublicAuthEndpoints
     public const string RegisterParentRoute = "/register/parent";
     public const string RegisterSchoolAdminRoute = "/register/school-admin";
     public const string LoginRoute = "/login";
+    public const string LoginPinRoute = "/login/pin";
+    public const string LookupMethodRoute = "/lookup-method";
     public const string RefreshRoute = "/refresh";
     public const string VerifyEmailRoute = "/verify-email";
     public const string ResendVerificationRoute = "/resend-verification";
@@ -37,6 +47,8 @@ public static class PublicAuthEndpoints
         group.MapPost(RegisterParentRoute, HandleRegisterParentAsync);
         group.MapPost(RegisterSchoolAdminRoute, HandleRegisterSchoolAdminAsync);
         group.MapPost(LoginRoute, HandleLoginAsync);
+        group.MapPost(LoginPinRoute, HandlePinLoginAsync);
+        group.MapPost(LookupMethodRoute, HandleLookupMethodAsync);
         group.MapPost(RefreshRoute, HandleRefreshAsync);
         group.MapPost(VerifyEmailRoute, HandleVerifyEmailAsync);
         group.MapPost(ResendVerificationRoute, HandleResendVerificationAsync);
@@ -137,6 +149,109 @@ public static class PublicAuthEndpoints
             return Results.Json(envelope, statusCode: outcome.HttpStatus);
         }
         return RenderOutcome(outcome, correlationId);
+    }
+
+    private static async Task<IResult> HandlePinLoginAsync(
+        PinLoginRequest request,
+        HttpContext http,
+        IAuthService auth,
+        CancellationToken ct)
+    {
+        var correlationId = AuthEndpointHelpers.ResolveCorrelationId(http);
+        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Pin))
+        {
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "اسم المستخدم ورمز PIN مطلوبان.", correlationId);
+        }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(request.Pin, "^[0-9]{4}$"))
+        {
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "رمز PIN يجب أن يكون 4 أرقام.", correlationId);
+        }
+        var cmd = new PinLoginCommand(
+            Username: request.Username,
+            Pin: request.Pin,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var outcome = await auth.LoginWithPinAsync(cmd, ct).ConfigureAwait(false);
+        return RenderOutcome(outcome, correlationId);
+    }
+
+    /// <summary>
+    /// Add-child redesign security non-negotiable #1: anti-enumeration
+    /// lookup. Returns <c>{ method: "pin" | "password" }</c> for every
+    /// input — including invalid usernames — so the response cannot be
+    /// used to probe the user catalogue.
+    ///
+    /// Disciplines:
+    /// • Real DB lookup runs even on miss (constant-time-ish: same code
+    ///   path executes; the dummy hash latency is dwarfed by the DB
+    ///   round-trip variance which we mask with small jitter).
+    /// • Invalid identifiers map deterministically to a method via
+    ///   SHA-256(identifier)[0] & 1 → so the same probe always sees the
+    ///   same answer (no leak from "different responses to the same
+    ///   input"); but different probes distribute ~50/50.
+    /// • Profile-switch-only children always answer "password" so the
+    ///   parent is steered to the profile-switch flow instead.
+    /// • Rate limit 3/min/IP (parity with /login).
+    /// </summary>
+    private static async Task<IResult> HandleLookupMethodAsync(
+        LookupMethodRequest request,
+        HttpContext http,
+        MuallimiDbContext db,
+        IRateLimitService rateLimit,
+        CancellationToken ct)
+    {
+        var correlationId = AuthEndpointHelpers.ResolveCorrelationId(http);
+        var ip = AuthEndpointHelpers.ResolveIp(http);
+
+        var rl = await rateLimit.IncrementAndCheckAsync(
+            "lookup-method-ip", ip, 3, System.TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+        if (!rl.Allowed)
+        {
+            return AuthEndpointHelpers.FailEnvelope(429, "rate_limited", "تم تجاوز عدد المحاولات.", correlationId);
+        }
+
+        var identifier = (request.Identifier ?? string.Empty).Trim().ToLowerInvariant();
+
+        User? user = null;
+        if (!string.IsNullOrEmpty(identifier))
+        {
+            user = await db.IdentityUsers.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u =>
+                    u.NormalizedUsername == identifier ||
+                    u.NormalizedEmail == identifier, ct).ConfigureAwait(false);
+        }
+
+        // Small jitter to mask DB-roundtrip variance between hit/miss.
+        await Task.Delay(System.Random.Shared.Next(8, 16), ct).ConfigureAwait(false);
+
+        string method;
+        if (user is null || string.IsNullOrEmpty(identifier))
+        {
+            // Deterministic-but-realistic fake. Same input → same answer.
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identifier));
+            method = (hash[0] & 1) == 0 ? "password" : "pin";
+        }
+        else if (user.AccountType == AccountType.Personal)
+        {
+            // Parents / school admins / operators always use password.
+            method = "password";
+        }
+        else
+        {
+            method = user.LoginMethod switch
+            {
+                "pin" => "pin",
+                "username_password" => "password",
+                // profile_switch_only or anything else: keep the answer
+                // shaped like a password account so the under-8 child's
+                // existence is not revealed. Login attempts will fail
+                // and the parent learns to use profile-switch.
+                _ => "password",
+            };
+        }
+
+        return AuthEndpointHelpers.OkEnvelope(new { method }, "ok", correlationId);
     }
 
     private static async Task<IResult> HandleRefreshAsync(

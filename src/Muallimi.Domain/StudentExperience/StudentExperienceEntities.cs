@@ -24,6 +24,18 @@ public class StudentProfile : ITenantScoped
     public DateOnly? Birthday { get; set; }
     /// <summary>Child gender: "male", "female", or null (Phase 9 parent-children flow).</summary>
     public string? Gender { get; set; }
+
+    // ── Extended add-child fields ─────────────────────────────────────
+    /// <summary>Avatar background color hex (e.g. "#1a3a2a"). Pairs with AvatarReference (emoji).</summary>
+    public string? AvatarBgColor { get; set; }
+    /// <summary>School name free-text as entered by parent. Informational only.</summary>
+    public string? SchoolName { get; set; }
+    /// <summary>Parent-assessed level: "beginner", "intermediate", "advanced". Null = skipped.</summary>
+    public string? PrefLevel { get; set; }
+    /// <summary>JSON array of preferred learning styles e.g. ["videos","exercises"]. Null = skipped.</summary>
+    public string? PrefStyles { get; set; }
+    /// <summary>Primary goal: "improve_level", "excel", "review_support". Null = skipped.</summary>
+    public string? PrefGoal { get; set; }
 }
 
 public class StudentSession : ITenantScoped

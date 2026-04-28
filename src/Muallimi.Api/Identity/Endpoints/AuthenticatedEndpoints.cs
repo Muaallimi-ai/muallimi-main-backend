@@ -45,6 +45,7 @@ public static class AuthenticatedEndpoints
     public const string TwoFactorEnableRoute = "/2fa/enable";
     public const string TwoFactorVerifyRoute = "/2fa/verify";
     public const string TwoFactorDisableRoute = "/2fa/disable";
+    public const string ChangePinRoute = "/change-pin";
 
     public static RouteGroupBuilder MapAuthenticatedEndpoints(this RouteGroupBuilder group)
     {
@@ -66,7 +67,77 @@ public static class AuthenticatedEndpoints
         group.MapPost(TwoFactorVerifyRoute, HandleTwoFactorVerifyAsync);
         group.MapPost(TwoFactorDisableRoute, HandleTwoFactorDisableAsync);
 
+        // Add-child redesign Phase 6.2: child self-service PIN change.
+        group.MapPost(ChangePinRoute, HandleChangePinAsync);
+
         return group;
+    }
+
+    private static async Task<IResult> HandleChangePinAsync(
+        ChangePinRequest? request,
+        HttpContext http,
+        ITokenService tokens,
+        ISessionService sessions,
+        IPasswordService passwords,
+        IWeakPinBlocklist weakPinBlocklist,
+        ICommandValidator<ChangePinCommand> validator,
+        MuallimiDbContext db,
+        IRateLimitService rateLimit,
+        CancellationToken ct)
+    {
+        var correlationId = AuthEndpointHelpers.ResolveCorrelationId(http);
+        if (!AuthClaimsReader.TryExtract(http, tokens, out var claims, out var failReason))
+            return AuthEndpointHelpers.FailEnvelope(401, failReason ?? "unauthorized", "غير مصرّح.", correlationId);
+        if (claims.Scope != "child")
+            return AuthEndpointHelpers.FailEnvelope(403, "child_scope_required", "هذه العملية متاحة لحساب الطفل فقط.", correlationId);
+        if (!await sessions.IsSessionActiveAsync(claims.SessionId, ct).ConfigureAwait(false))
+            return AuthEndpointHelpers.FailEnvelope(401, "session_revoked", "الجلسة منتهية.", correlationId);
+
+        var ip = AuthEndpointHelpers.ResolveIp(http);
+        var rl = await rateLimit.IncrementAndCheckAsync("change-pin", claims.UserId.ToString("D"), 5, TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+        if (!rl.Allowed)
+            return AuthEndpointHelpers.FailEnvelope(429, "rate_limited", "تم تجاوز عدد المحاولات.", correlationId);
+
+        var body = request ?? new ChangePinRequest();
+        var cmd = new ChangePinCommand(
+            ChildUserId: claims.UserId,
+            CurrentPin: body.CurrentPin,
+            NewPin: body.NewPin,
+            IpAddress: ip,
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+
+        var child = await db.IdentityUsers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.Id == claims.UserId, ct).ConfigureAwait(false);
+        if (child is null
+            || child.AccountType != Muallimi.Domain.Identity.Enums.AccountType.Managed
+            || child.LoginMethod != "pin")
+        {
+            return AuthEndpointHelpers.FailEnvelope(403, "pin_not_applicable", "هذا الحساب لا يستخدم رمز PIN.", correlationId);
+        }
+        if (!passwords.VerifyWithDummyFallback(cmd.CurrentPin, child.PinHash))
+        {
+            return AuthEndpointHelpers.FailEnvelope(401, "invalid_current_pin", "رمز PIN الحالي غير صحيح.", correlationId);
+        }
+
+        // Pull birth year from the StudentProfile so the new PIN cannot equal it.
+        int? birthYear = null;
+        var profile = await db.StudentProfiles.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.UserId == child.Id, ct).ConfigureAwait(false);
+        if (profile?.Birthday is { } bd) birthYear = bd.Year;
+        if (weakPinBlocklist.IsWeak(cmd.NewPin, birthYear))
+        {
+            return AuthEndpointHelpers.FailEnvelope(422, "pin_too_weak", "رمز PIN ضعيف. اختر رمزًا أصعب.", correlationId);
+        }
+
+        child.PinHash = passwords.Hash(cmd.NewPin);
+        child.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        return AuthEndpointHelpers.OkEnvelope(new { changed = true }, "تم تغيير رمز PIN.", correlationId);
     }
 
     private static async Task<IResult> HandleLogoutAsync(
@@ -462,7 +533,14 @@ internal static class AuthClaimsReader
             .Concat(principal.FindAll(ClaimTypes.Role).Select(c => c.Value))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        claims = new AuthClaims(userId, tenantId, sessionId, roles);
+        var scope = principal.FindFirst("scope")?.Value;
+        Guid? derivedFromSessionId = null;
+        var derivedRaw = principal.FindFirst("derived_from_session_id")?.Value;
+        if (!string.IsNullOrEmpty(derivedRaw) && Guid.TryParse(derivedRaw, out var derivedParsed))
+        {
+            derivedFromSessionId = derivedParsed;
+        }
+        claims = new AuthClaims(userId, tenantId, sessionId, roles, scope, derivedFromSessionId);
         http.User = principal;
         return true;
     }
@@ -472,4 +550,6 @@ internal readonly record struct AuthClaims(
     Guid UserId,
     Guid TenantId,
     Guid SessionId,
-    string[] Roles);
+    string[] Roles,
+    string? Scope,
+    Guid? DerivedFromSessionId);

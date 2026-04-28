@@ -30,6 +30,7 @@ public static class ParentChildrenEndpoints
 
     public const string SuspendSubRoute = "/{id:guid}/suspend";
     public const string UnsuspendSubRoute = "/{id:guid}/unsuspend";
+    public const string UnlockSubRoute = "/{id:guid}/unlock";
     public const string SessionsSubRoute = "/{id:guid}/sessions";
     public const string LoginHistorySubRoute = "/{id:guid}/login-history";
 
@@ -45,6 +46,7 @@ public static class ParentChildrenEndpoints
         // US5 — Parent oversight
         parent.MapPost(GroupRoute + SuspendSubRoute, HandleSuspendChildAsync);
         parent.MapPost(GroupRoute + UnsuspendSubRoute, HandleUnsuspendChildAsync);
+        parent.MapPost(GroupRoute + UnlockSubRoute, HandleUnlockChildAsync);
         parent.MapGet(GroupRoute + SessionsSubRoute, HandleListChildSessionsAsync);
         parent.MapDelete(GroupRoute + "/{id:guid}/sessions/{sessionId:guid}", HandleRevokeChildSessionAsync);
         parent.MapGet(GroupRoute + LoginHistorySubRoute, HandleGetLoginHistoryAsync);
@@ -74,13 +76,24 @@ public static class ParentChildrenEndpoints
             ParentUserId: claims.UserId,
             ParentTenantId: claims.TenantId,
             FullName: request.FullName ?? string.Empty,
-            FullNameEn: request.FullNameEn,
             Grade: request.Grade,
-            Gender: (request.Gender ?? string.Empty).Trim().ToLowerInvariant(),
-            Birthday: request.Birthday,
+            Gender: string.IsNullOrWhiteSpace(request.Gender)
+                ? null
+                : request.Gender!.Trim().ToLowerInvariant(),
+            BirthYear: request.BirthYear,
+            BirthMonth: request.BirthMonth,
+            CurriculumType: string.IsNullOrWhiteSpace(request.CurriculumType) ? "Moe" : request.CurriculumType,
+            SchoolName: request.SchoolName,
+            AvatarEmoji: request.AvatarEmoji ?? string.Empty,
+            AvatarBgColor: request.AvatarBgColor ?? string.Empty,
+            PrefLevel: request.PrefLevel,
+            PrefStyles: request.PrefStyles,
+            PrefGoal: request.PrefGoal,
+            LoginMethod: string.IsNullOrWhiteSpace(request.LoginMethod) ? "username_password" : request.LoginMethod,
+            Pin: request.Pin,
             PreferredUsername: request.PreferredUsername,
             CustomPassword: request.CustomPassword,
-            PasswordLocale: string.IsNullOrWhiteSpace(request.PasswordLocale) ? "ar" : request.PasswordLocale!.Trim().ToLowerInvariant(),
+            ParentalConsentAcknowledged: request.ParentalConsentAcknowledged,
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
             CorrelationId: correlationId);
@@ -169,7 +182,8 @@ public static class ParentChildrenEndpoints
             Birthday: request.Birthday,
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            Username: request.Username);
         var errors = validator.Validate(cmd);
         if (errors.Count > 0)
         {
@@ -306,6 +320,43 @@ public static class ParentChildrenEndpoints
             return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
 
         var result = await users.UnsuspendChildAsync(cmd, ct).ConfigureAwait(false);
+        return RenderResult(result, correlationId);
+    }
+
+    private static async Task<IResult> HandleUnlockChildAsync(
+        Guid id,
+        UnlockChildRequest request,
+        HttpContext http,
+        IUserManagementService users,
+        ITokenService tokens,
+        ISessionService sessions,
+        IRateLimitService rateLimit,
+        ICommandValidator<UnlockChildCommand> validator,
+        CancellationToken ct)
+    {
+        var correlationId = AuthEndpointHelpers.ResolveCorrelationId(http);
+        if (!TryRequireParent(http, tokens, correlationId, out var claims, out var unauthorized))
+            return unauthorized!;
+        if (!await sessions.IsSessionActiveAsync(claims.SessionId, ct).ConfigureAwait(false))
+            return AuthEndpointHelpers.FailEnvelope(401, "session_revoked", "الجلسة منتهية.", correlationId);
+
+        var rl = await rateLimit.IncrementAndCheckAsync("child-unlock", claims.UserId.ToString("D"), 10, TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+        if (!rl.Allowed)
+            return AuthEndpointHelpers.FailEnvelope(429, "rate_limited", "تم تجاوز عدد المحاولات.", correlationId);
+
+        var cmd = new UnlockChildCommand(
+            ParentUserId: claims.UserId,
+            ParentTenantId: claims.TenantId,
+            ChildUserId: id,
+            ParentPassword: request?.ParentPassword ?? string.Empty,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+
+        var result = await users.UnlockChildAsync(cmd, ct).ConfigureAwait(false);
         return RenderResult(result, correlationId);
     }
 

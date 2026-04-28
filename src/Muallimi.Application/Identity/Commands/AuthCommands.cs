@@ -51,6 +51,19 @@ public sealed record LoginCommand(
     string? UserAgent,
     string CorrelationId);
 
+/// <summary>
+/// Child login via 4-digit PIN (8–12 age tier). The endpoint resolves
+/// the username (no @, no email) and verifies the PIN against
+/// <c>User.PinHash</c>. Only Managed accounts with
+/// <c>LoginMethod = "pin"</c> are eligible.
+/// </summary>
+public sealed record PinLoginCommand(
+    string Username,
+    string Pin,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
 public sealed record RefreshTokenCommand(
     string RefreshToken,
     string IpAddress,

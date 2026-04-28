@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muallimi.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace Muallimi.Infrastructure.Migrations
 {
     [DbContext(typeof(MuallimiDbContext))]
-    partial class MuallimiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260427132341_AddChildLoginMethodAndExtendedFields")]
+    partial class AddChildLoginMethodAndExtendedFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1844,52 +1847,6 @@ namespace Muallimi.Infrastructure.Migrations
                     b.ToTable("identity_login_attempts", (string)null);
                 });
 
-            modelBuilder.Entity("Muallimi.Domain.Identity.Entities.ParentalConsent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<Guid>("ChildUserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("child_user_id");
-
-                    b.Property<DateTime>("ConsentedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("consented_at");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("IpAddress")
-                        .HasMaxLength(45)
-                        .HasColumnType("character varying(45)")
-                        .HasColumnName("ip_address");
-
-                    b.Property<bool>("IsLegacyAssumed")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_legacy_assumed");
-
-                    b.Property<Guid>("ParentUserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("parent_user_id");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("tenant_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("ParentUserId", "ChildUserId")
-                        .IsUnique();
-
-                    b.ToTable("parental_consents", (string)null);
-                });
-
             modelBuilder.Entity("Muallimi.Domain.Identity.Entities.PasswordResetToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2336,10 +2293,6 @@ namespace Muallimi.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
-                    b.Property<Guid?>("DerivedFromSessionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("derived_from_session_id");
-
                     b.Property<string>("DeviceName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -2373,8 +2326,6 @@ namespace Muallimi.Infrastructure.Migrations
                         .HasColumnName("user_id");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("DerivedFromSessionId");
 
                     b.HasIndex("UserId", "RevokedAt");
 

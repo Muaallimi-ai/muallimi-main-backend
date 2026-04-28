@@ -125,15 +125,21 @@ public sealed class IdentityTestHarness : IDisposable
                 new Muallimi.Api.Identity.Services.StudentProfileIdContributor(db),
             });
 
+        // Add-child redesign Phase 5: cascade-revoke and Phase 7.3:
+        // subscription-expiry guard now factor into auth + reset flows.
+        var sessionCascade = new SessionCascadeService(db, sessionCache);
+        var subscriptionGuard = new SubscriptionGuard(db);
+
         var auth = new AuthService(
             db, passwords, tokens, rateLimit, sessions, audit.Emitter,
             notifications, verification, linkBuilder, profileIds,
+            sessionCascade, subscriptionGuard,
             NullLogger<AuthService>.Instance,
             twoFactorMgmt);
 
         var resetLinkBuilder = new PasswordResetLinkBuilder("http://test.local");
         var pwReset = new PasswordResetService(
-            db, passwords, sessions, audit.Emitter, notifications,
+            db, passwords, sessions, sessionCascade, audit.Emitter, notifications,
             resetLinkBuilder, NullLogger<PasswordResetService>.Instance);
 
         var impersonation = new Muallimi.Api.Identity.Services.ImpersonationService(
@@ -190,6 +196,67 @@ public sealed class IdentityTestHarness : IDisposable
     }
 
     public void Dispose() => Db.Dispose();
+
+    /// <summary>
+    /// Seeds a verified Family-tenant parent directly via DB inserts,
+    /// bypassing the post-Paymob 2-phase registration flow (which creates
+    /// the user only after payment confirmation). Used by every test
+    /// that previously relied on <c>AuthService.RegisterParentAsync</c>
+    /// returning a created user.
+    /// </summary>
+    public async Task<(Guid UserId, Guid TenantId)> SeedVerifiedParentAsync(
+        string email,
+        string password = "HorseBatteryStaple!77",
+        CancellationToken ct = default)
+    {
+        var normalized = email.Trim().ToLowerInvariant();
+
+        // Family tenant for this parent.
+        var tenant = new Tenant
+        {
+            Id = Guid.NewGuid(),
+            Type = TenantType.Family,
+            DisplayName = email,
+            Locale = "ar",
+            Status = TenantStatus.Active,
+            Metadata = "{}",
+            CreatedAt = DateTime.UtcNow,
+        };
+        Db.IdentityTenants.Add(tenant);
+
+        var userId = Guid.NewGuid();
+        var user = new User
+        {
+            Id = userId,
+            TenantId = tenant.Id,
+            AccountType = AccountType.Personal,
+            Email = email.Trim(),
+            NormalizedEmail = normalized,
+            FullName = "الوالد " + email,
+            Locale = "ar",
+            Status = UserStatus.Active,
+            PasswordHash = Passwords.Hash(password),
+            PasswordChangedAt = DateTime.UtcNow,
+            EmailVerified = true,
+            EmailVerifiedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+        };
+        Db.IdentityUsers.Add(user);
+
+        var parentRole = await Db.IdentityRoles.IgnoreQueryFilters()
+            .SingleAsync(r => r.Name == "parent", ct).ConfigureAwait(false);
+        Db.IdentityUserRoles.Add(new UserRole
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            RoleId = parentRole.Id,
+            TenantId = tenant.Id,
+            GrantedBy = userId,
+            GrantedAt = DateTime.UtcNow,
+        });
+        await Db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return (userId, tenant.Id);
+    }
 }
 
 /// <summary>

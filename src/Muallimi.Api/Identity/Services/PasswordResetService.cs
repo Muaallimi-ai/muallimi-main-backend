@@ -66,6 +66,7 @@ public sealed class PasswordResetService : IPasswordResetService
     private readonly MuallimiDbContext _db;
     private readonly IPasswordService _passwords;
     private readonly ISessionService _sessions;
+    private readonly ISessionCascadeService _sessionCascade;
     private readonly AuditEventEmitter _audit;
     private readonly IIdentityNotificationSender _notifications;
     private readonly IPasswordResetLinkBuilder _linkBuilder;
@@ -75,6 +76,7 @@ public sealed class PasswordResetService : IPasswordResetService
         MuallimiDbContext db,
         IPasswordService passwords,
         ISessionService sessions,
+        ISessionCascadeService sessionCascade,
         AuditEventEmitter audit,
         IIdentityNotificationSender notifications,
         IPasswordResetLinkBuilder linkBuilder,
@@ -83,6 +85,7 @@ public sealed class PasswordResetService : IPasswordResetService
         _db = db;
         _passwords = passwords;
         _sessions = sessions;
+        _sessionCascade = sessionCascade;
         _audit = audit;
         _notifications = notifications;
         _linkBuilder = linkBuilder;
@@ -184,6 +187,8 @@ public sealed class PasswordResetService : IPasswordResetService
 
         // Revoke all sessions after reset
         await _sessions.RevokeAllForUserAsync(user.Id, exceptSessionId: null, ct).ConfigureAwait(false);
+        // Add-child redesign: parent password reset cascades to derived child sessions.
+        await _sessionCascade.RevokeAllDerivedFromUserAsync(user.Id, ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
         {
@@ -244,6 +249,8 @@ public sealed class PasswordResetService : IPasswordResetService
             user.Id,
             exceptSessionId: currentSessionId == Guid.Empty ? null : currentSessionId,
             ct).ConfigureAwait(false);
+        // Add-child redesign: parent password change cascades to derived child sessions.
+        await _sessionCascade.RevokeAllDerivedFromUserAsync(user.Id, ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
         {
