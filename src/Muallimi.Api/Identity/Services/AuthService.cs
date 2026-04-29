@@ -497,7 +497,14 @@ public sealed class AuthService : IAuthService
         CancellationToken ct = default)
     {
         // Credentials OK + user admissible — mark a successful login.
+        // Phase 9 Phase 3 (Gap 11): capture the parent-reset notice
+        // before clearing — the response carries the timestamp once;
+        // subsequent logins return null. Marker + login + clear are
+        // batched into a single SaveChangesAsync so a crash between
+        // calls cannot lose the marker.
+        var parentResetNotice = user.PendingParentResetNoticeAt;
         user.MarkSuccessfulLogin(ipAddress);
+        if (parentResetNotice is not null) user.AcknowledgeParentResetNotice();
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
         await _rateLimit.ClearLockoutAsync(user.Id.ToString("D"), ct).ConfigureAwait(false);
 
@@ -604,7 +611,7 @@ public sealed class AuthService : IAuthService
         }
 
         return AuthOutcome.Ok(
-            BuildAuthResponse(user, tenant.Type, roleNames, access.Token, refresh.token, access.ExpiresAt),
+            BuildAuthResponse(user, tenant.Type, roleNames, access.Token, refresh.token, access.ExpiresAt, parentResetNotice),
             "تم تسجيل الدخول بنجاح");
     }
 
@@ -880,6 +887,7 @@ public sealed class AuthService : IAuthService
             EmailVerified = user.EmailVerified,
             TwoFactorEnabled = user.TwoFactorEnabled,
             RequiresPasswordReset = user.RequiresPasswordReset,
+            ParentResetNoticeAt = user.PendingParentResetNoticeAt,
         };
 
     private AuthResponse BuildAuthResponse(
@@ -888,7 +896,8 @@ public sealed class AuthService : IAuthService
         IReadOnlyList<string> roles,
         string accessToken,
         string refreshToken,
-        DateTime accessExpiresAt)
+        DateTime accessExpiresAt,
+        DateTime? parentResetNoticeOverride = null)
     {
         var base_ = BuildAuthResponsePlaceholder(user, tenantType, roles);
         return new AuthResponse
@@ -907,6 +916,10 @@ public sealed class AuthService : IAuthService
             EmailVerified = base_.EmailVerified,
             TwoFactorEnabled = base_.TwoFactorEnabled,
             RequiresPasswordReset = base_.RequiresPasswordReset,
+            // Override is needed because user.PendingParentResetNoticeAt is
+            // already cleared by the time this builder runs (intentionally
+            // — see Gap 11 handling in CompleteLoginAsync).
+            ParentResetNoticeAt = parentResetNoticeOverride ?? base_.ParentResetNoticeAt,
         };
     }
 

@@ -47,8 +47,9 @@ public class ParentChildrenContractTests
         var names = JsonNames(typeof(CreateChildRequest));
         foreach (var expected in new[]
         {
-            "fullName", "fullNameEn", "grade", "gender", "birthday",
-            "preferredUsername", "customPassword", "passwordLocale",
+            "fullName", "grade", "gender", "birthYear", "birthMonth",
+            "loginMethod", "pin", "preferredUsername", "customPassword",
+            "parentalConsentAcknowledged",
         })
         {
             Assert.Contains(expected, names);
@@ -469,7 +470,10 @@ public class ParentChildrenContractTests
             h.Audit.Emitter,
             h.Notifications,
             NullLogger<UserManagementService>.Instance,
-            new WeakPinBlocklist());
+            new WeakPinBlocklist(),
+            new Muallimi.Api.Tests.Identity.AlwaysFreshManagerReAuth(),
+            new Muallimi.Api.Tests.Identity.InMemoryCredentialAuditWriter(),
+            new Muallimi.Application.Identity.Validators.ZxcvbnPasswordStrengthValidator());
 
     private static string[] JsonNames(Type t)
         => t.GetProperties(BindingFlags.Public | BindingFlags.Instance)

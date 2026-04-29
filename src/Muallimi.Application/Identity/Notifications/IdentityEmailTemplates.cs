@@ -24,6 +24,30 @@ public static class IdentityTemplateKeys
     public const string UnusualLogin = "identity.unusual_login";
     public const string ChildCreated = "identity.child_created";
     public const string ChildUnusualLogin = "identity.child_unusual_login";
+
+    /// <summary>
+    /// Sent to every guardian when a 13+ child changes their own
+    /// password. Tone is calm and informative — never alarming. Never
+    /// contains the new password (passwords are hashed; the system
+    /// cannot retrieve them).
+    /// </summary>
+    public const string ChildPasswordChangedByChild = "identity.child_password_changed_by_child";
+
+    /// <summary>
+    /// Sent to the parent on the day a parent-managed child reaches
+    /// age 8 — they are now eligible to be upgraded from
+    /// profile-switch-only to a PIN-protected account. The dashboard
+    /// gains an "Add PIN" affordance on the child's card.
+    /// </summary>
+    public const string ChildBirthdayPinEligible = "identity.child_birthday_pin_eligible";
+
+    /// <summary>
+    /// Sent to the parent on the day a parent-managed child reaches
+    /// age 13 — they are now eligible to be upgraded from a PIN to a
+    /// username + password. The dashboard gains an "Upgrade to
+    /// password" affordance on the child's card.
+    /// </summary>
+    public const string ChildBirthdayPasswordEligible = "identity.child_birthday_password_eligible";
 }
 
 public sealed record IdentityEmailRendering(string Subject, string Body);
@@ -59,6 +83,18 @@ public static class IdentityEmailTemplates
         [IdentityTemplateKeys.ChildUnusualLogin] = new(
             Subject: "تنبيه أمني — دخول غير معتاد على حساب طفلك",
             Body: "مرحبًا {full_name},\nلاحظنا تسجيل دخول لطفلك {child_name} من جهاز جديد أو موقع غير معتاد:\nالجهاز: {device}\nالموقع: {location}\nإن لم يكن ذلك بإذنك، بإمكانك إنهاء جلسته من صفحة «أطفالي»."),
+
+        [IdentityTemplateKeys.ChildPasswordChangedByChild] = new(
+            Subject: "{child_name} غيّر كلمة مرور حسابه على معلّمي",
+            Body: "أهلًا {full_name},\nقام {child_name} بتغيير كلمة مرور حسابه على منصة معلّمي. هذا إجراء طبيعي ونحن من نُبلغ به.\n\nالحساب: {child_name}\nالمرحلة: {child_grade}\nاسم المستخدم: {child_username}\nوقت التغيير: {change_time}\n\nإذا لم تكن على علم بذلك أو ترغب في إعادة تعيين كلمة المرور، يمكنك فعل ذلك من لوحة التحكم.\n\nتجاهل هذه الرسالة إذا كنت على علم بالتغيير."),
+
+        [IdentityTemplateKeys.ChildBirthdayPinEligible] = new(
+            Subject: "{child_name} أصبح بإمكانه استخدام رقم PIN",
+            Body: "أهلًا {full_name},\n{child_name} أصبح عمره 8 سنوات اليوم — يمكنك الآن إضافة رقم PIN لحسابه ليسجّل الدخول بنفسه.\n\nأضف الـ PIN من لوحة التحكم متى ما أردت — لا داعي للاستعجال. حتى تضيفه، يستمر {child_name} بالدخول عبر التبديل من حسابك."),
+
+        [IdentityTemplateKeys.ChildBirthdayPasswordEligible] = new(
+            Subject: "{child_name} أصبح جاهزًا لكلمة مرور خاصة",
+            Body: "أهلًا {full_name},\n{child_name} أصبح عمره 13 سنة اليوم — يمكنك الآن ترقية حسابه من PIN إلى كلمة مرور كاملة.\n\nقم بالترقية من لوحة التحكم عندما يناسبك. حتى تقوم بذلك، يستمر {child_name} باستخدام رقم الـ PIN كالمعتاد."),
     };
 
     private static readonly IReadOnlyDictionary<string, IdentityEmailRendering> EnglishTemplates = new Dictionary<string, IdentityEmailRendering>
@@ -90,6 +126,18 @@ public static class IdentityEmailTemplates
         [IdentityTemplateKeys.ChildUnusualLogin] = new(
             Subject: "Security alert — unusual sign-in on your child's account",
             Body: "Hi {full_name},\nWe detected a sign-in for your child {child_name} from a new device or unfamiliar location:\nDevice: {device}\nLocation: {location}\nIf this was not authorised, you can end their session from the \"My Children\" page."),
+
+        [IdentityTemplateKeys.ChildPasswordChangedByChild] = new(
+            Subject: "{child_name} changed their account password on Muaallimi",
+            Body: "Hi {full_name},\n{child_name} changed their Muaallimi account password. This is a normal action and we are letting you know.\n\nAccount: {child_name}\nGrade: {child_grade}\nUsername: {child_username}\nTime of change: {change_time}\n\nIf you were not aware or want to reset the password, you can do so from your dashboard.\n\nIgnore this message if you knew about the change."),
+
+        [IdentityTemplateKeys.ChildBirthdayPinEligible] = new(
+            Subject: "{child_name} can now use a PIN",
+            Body: "Hi {full_name},\n{child_name} turned 8 today — you can now add a PIN to their account so they can sign in themselves.\n\nAdd the PIN from the dashboard whenever you're ready — there's no rush. Until you do, {child_name} keeps signing in by switching profiles from your account."),
+
+        [IdentityTemplateKeys.ChildBirthdayPasswordEligible] = new(
+            Subject: "{child_name} is ready for their own password",
+            Body: "Hi {full_name},\n{child_name} turned 13 today — you can now upgrade their account from PIN to a full password.\n\nUpgrade from the dashboard whenever it suits you. Until you do, {child_name} continues using their PIN as usual."),
     };
 
     public static IdentityEmailRendering Render(

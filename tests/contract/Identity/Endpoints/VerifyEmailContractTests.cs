@@ -50,12 +50,11 @@ public class VerifyEmailContractTests
     public async Task Verify_With_Valid_Token_Activates_User()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "verify@example.com", "HorseBatteryStaple!77", "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
+        var (userId, _) = await h.SeedUnverifiedParentAsync("verify@example.com");
+        var issued = await h.Verification.IssueAsync(userId, Guid.NewGuid().ToString("D"));
+        Assert.True(issued.Success);
 
-        var token = ExtractVerificationToken(h.Notifications.Dispatched[^1].Link);
-        var result = await h.Verification.ConsumeAsync(token, Guid.NewGuid().ToString("D"));
+        var result = await h.Verification.ConsumeAsync(issued.PlaintextToken!, Guid.NewGuid().ToString("D"));
 
         Assert.True(result.Success);
         var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
@@ -78,15 +77,13 @@ public class VerifyEmailContractTests
     public async Task Verify_Cannot_Consume_Same_Token_Twice()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "once@example.com", "HorseBatteryStaple!77", "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
-        var token = ExtractVerificationToken(h.Notifications.Dispatched[^1].Link);
+        var (userId, _) = await h.SeedUnverifiedParentAsync("once@example.com");
+        var issued = await h.Verification.IssueAsync(userId, Guid.NewGuid().ToString("D"));
 
-        var first = await h.Verification.ConsumeAsync(token, Guid.NewGuid().ToString("D"));
+        var first = await h.Verification.ConsumeAsync(issued.PlaintextToken!, Guid.NewGuid().ToString("D"));
         Assert.True(first.Success);
 
-        var second = await h.Verification.ConsumeAsync(token, Guid.NewGuid().ToString("D"));
+        var second = await h.Verification.ConsumeAsync(issued.PlaintextToken!, Guid.NewGuid().ToString("D"));
         Assert.False(second.Success);
         Assert.Equal("token_invalid", second.ErrorCode);
     }
@@ -95,17 +92,15 @@ public class VerifyEmailContractTests
     public async Task Resend_Invalidates_Outstanding_Tokens_And_Issues_New_One()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "resend@example.com", "HorseBatteryStaple!77", "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
-        var firstToken = ExtractVerificationToken(h.Notifications.Dispatched[^1].Link);
+        var (userId, _) = await h.SeedUnverifiedParentAsync("resend@example.com");
+        var firstIssued = await h.Verification.IssueAsync(userId, Guid.NewGuid().ToString("D"));
 
         var resend = await h.Verification.ResendAsync("resend@example.com", Guid.NewGuid().ToString("D"));
         Assert.True(resend.Success);
         Assert.False(string.IsNullOrWhiteSpace(resend.PlaintextToken));
 
         // First (original) token is now unusable.
-        var stale = await h.Verification.ConsumeAsync(firstToken, Guid.NewGuid().ToString("D"));
+        var stale = await h.Verification.ConsumeAsync(firstIssued.PlaintextToken!, Guid.NewGuid().ToString("D"));
         Assert.False(stale.Success);
 
         // Fresh token consumes OK.

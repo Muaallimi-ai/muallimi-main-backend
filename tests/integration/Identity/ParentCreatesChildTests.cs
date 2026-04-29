@@ -36,7 +36,10 @@ public class ParentCreatesChildTests
             new ChildPasswordGenerator(new Random(7)),
             h.Audit.Emitter, h.Notifications,
             NullLogger<UserManagementService>.Instance,
-            new WeakPinBlocklist());
+            new WeakPinBlocklist(),
+            new Muallimi.Api.Tests.Identity.AlwaysFreshManagerReAuth(),
+            new Muallimi.Api.Tests.Identity.InMemoryCredentialAuditWriter(),
+            new Muallimi.Application.Identity.Validators.ZxcvbnPasswordStrengthValidator());
 
         var created = await svc.CreateChildAsync(ChildCommandFixtures.MakeCreateChild(
             parentUserId: parent.Id,

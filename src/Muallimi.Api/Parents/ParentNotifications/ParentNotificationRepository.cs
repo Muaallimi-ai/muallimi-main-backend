@@ -53,6 +53,22 @@ public interface IParentNotificationRepository
         CancellationToken ct = default);
 
     Task UpdateAsync(ParentNotification notification, CancellationToken ct = default);
+
+    /// <summary>
+    /// Phase 9 Phase 4 dedup helper: returns the most recent
+    /// <see cref="ParentNotification"/> for the given (parent, child,
+    /// kind) tuple created on or after <paramref name="sinceUtc"/>, or
+    /// null if none. Used by <c>ChildCredentialNotifier</c> to collapse
+    /// repeated credential events into a single inbox row per day per
+    /// child instead of stacking N rows.
+    /// </summary>
+    Task<ParentNotification?> FindLatestByKindAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        Guid childId,
+        string notificationKind,
+        DateTime sinceUtc,
+        CancellationToken ct = default);
 }
 
 public sealed class ParentNotificationRepository : IParentNotificationRepository
@@ -150,6 +166,23 @@ public sealed class ParentNotificationRepository : IParentNotificationRepository
         _db.ParentNotifications.Update(notification);
         return Task.CompletedTask;
     }
+
+    public Task<ParentNotification?> FindLatestByKindAsync(
+        Guid tenantId,
+        Guid parentProfileId,
+        Guid childId,
+        string notificationKind,
+        DateTime sinceUtc,
+        CancellationToken ct = default)
+        => _db.ParentNotifications
+            .IgnoreQueryFilters()
+            .Where(n => n.TenantId == tenantId
+                     && n.ParentProfileId == parentProfileId
+                     && n.ChildId == childId
+                     && n.NotificationKind == notificationKind
+                     && n.CreatedAt >= sinceUtc)
+            .OrderByDescending(n => n.CreatedAt)
+            .FirstOrDefaultAsync(ct);
 }
 
 public static class ParentNotificationRepositoryServiceCollectionExtensions

@@ -137,7 +137,10 @@ public class UnusualChildLoginNotifiesParentTests
             new ChildPasswordGenerator(new Random(66)),
             h.Audit.Emitter, h.Notifications,
             NullLogger<UserManagementService>.Instance,
-            new WeakPinBlocklist());
+            new WeakPinBlocklist(),
+            new Muallimi.Api.Tests.Identity.AlwaysFreshManagerReAuth(),
+            new Muallimi.Api.Tests.Identity.InMemoryCredentialAuditWriter(),
+            new Muallimi.Application.Identity.Validators.ZxcvbnPasswordStrengthValidator());
 
     private static AuthService BuildAuthWithDetector(IdentityTestHarness h, UnusualLoginDetector detector)
     {

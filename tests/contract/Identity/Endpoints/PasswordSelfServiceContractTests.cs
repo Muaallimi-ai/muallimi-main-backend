@@ -63,22 +63,13 @@ public class PasswordSelfServiceContractTests
     public async Task ChangePassword_WithValidCurrentPassword_Succeeds()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        var regOutcome = await h.AuthService.RegisterParentAsync(new(
-            "chpw@example.com", "Temp-Pass-1!", "تغيير كلمة", null, "ar",
-            true, "127.0.0.1", null, Guid.NewGuid().ToString("D")));
-        Assert.True(regOutcome.Success);
-
-        // Verify email so user is Active
-        var token = h.Notifications.Dispatched.FirstOrDefault(n => n.Kind == "email_verification")?.Link;
-        var tokenValue = System.Web.HttpUtility.ParseQueryString(new Uri(token!).Query)["token"] ?? token!.Split("token=")[1];
-        await h.Verification.ConsumeAsync(tokenValue, Guid.NewGuid().ToString("D"));
+        var (userId, _) = await h.SeedVerifiedParentAsync("chpw@example.com", "Temp-Pass-1!");
 
         var loginOutcome = await h.AuthService.LoginAsync(new(
             "chpw@example.com", "Temp-Pass-1!", false, null, null,
             "127.0.0.1", null, Guid.NewGuid().ToString("D")));
         Assert.True(loginOutcome.Success);
 
-        var userId = Guid.Parse(loginOutcome.Payload!.UserId);
         // Retrieve the active session from DB to pass as the "current" session to preserve
         var activeSession = await h.Db.IdentityUserSessions
             .Where(s => s.UserId == userId && s.RevokedAt == null)
@@ -100,10 +91,7 @@ public class PasswordSelfServiceContractTests
     public async Task ChangePassword_WrongCurrentPassword_Returns_401()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        var regOutcome = await h.AuthService.RegisterParentAsync(new(
-            "chpw2@example.com", "Temp-Pass-1!", "مستخدم", null, "ar",
-            true, "127.0.0.1", null, Guid.NewGuid().ToString("D")));
-        var userId = Guid.Parse(regOutcome.Payload!.UserId);
+        var (userId, _) = await h.SeedVerifiedParentAsync("chpw2@example.com", "Temp-Pass-1!");
         var outcome = await h.PasswordResetService.ChangePasswordAsync(new ChangePasswordCommand(
             UserId: userId,
             CurrentPassword: "WrongPassword-1!",

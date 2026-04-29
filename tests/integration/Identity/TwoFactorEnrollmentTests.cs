@@ -21,14 +21,7 @@ public class TwoFactorEnrollmentTests
         const string pw = "SecurePass-2!";
         var corr = Guid.NewGuid().ToString("D");
 
-        // Register + verify
-        var reg = await h.AuthService.RegisterParentAsync(new(
-            email, pw, "مستخدم", null, "ar", true, "127.0.0.1", null, corr));
-        Assert.True(reg.Success);
-        var evToken = ExtractToken(h.Notifications.Dispatched
-            .First(n => n.Kind == "email_verification").Link);
-        await h.Verification.ConsumeAsync(evToken, corr);
-        var userId = Guid.Parse(reg.Payload!.UserId);
+        var (userId, _) = await h.SeedVerifiedParentAsync(email, pw);
 
         // Step 1: enable — returns QR uri + temp secret
         var enableOutcome = await h.TwoFactorManagement.StartEnrollmentAsync(
@@ -73,12 +66,7 @@ public class TwoFactorEnrollmentTests
         const string email = "2fabad@example.com";
         var corr = Guid.NewGuid().ToString("D");
 
-        var reg = await h.AuthService.RegisterParentAsync(new(
-            email, "SecurePass-2!", "مستخدم", null, "ar", true, "127.0.0.1", null, corr));
-        var evToken = ExtractToken(h.Notifications.Dispatched
-            .First(n => n.Kind == "email_verification").Link);
-        await h.Verification.ConsumeAsync(evToken, corr);
-        var userId = Guid.Parse(reg.Payload!.UserId);
+        var (userId, _) = await h.SeedVerifiedParentAsync(email, "SecurePass-2!");
 
         var enableOutcome = await h.TwoFactorManagement.StartEnrollmentAsync(
             new EnableTwoFactorCommand(userId, corr));

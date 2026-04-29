@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muallimi.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace Muallimi.Infrastructure.Migrations
 {
     [DbContext(typeof(MuallimiDbContext))]
-    partial class MuallimiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260428134954_AddCredentialConcurrencyAndAgeTransition")]
+    partial class AddCredentialConcurrencyAndAgeTransition
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2232,10 +2235,6 @@ namespace Muallimi.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(0)
                         .HasColumnName("password_hash_version");
-
-                    b.Property<DateTime?>("PendingParentResetNoticeAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("pending_parent_reset_notice_at");
 
                     b.Property<string>("PhoneNumber")
                         .HasMaxLength(20)

@@ -80,8 +80,12 @@ public class RegisterParentContractTests
     }
 
     [Fact]
-    public async Task RegisterParent_Creates_Family_Tenant_User_And_Verification_Email()
+    public async Task RegisterParent_Accepts_Pending_Registration_Awaiting_Payment()
     {
+        // Post-Paymob 2-phase contract: RegisterParentAsync stores a
+        // PendingRegistration row and returns AuthOutcome.Pending(202).
+        // The User + Family tenant + verification email are created
+        // only after payment confirmation by PaymentRegistrationService.
         using var h = await IdentityTestHarness.CreateAsync();
 
         var cmd = new RegisterParentCommand(
@@ -102,29 +106,30 @@ public class RegisterParentContractTests
         var outcome = await h.AuthService.RegisterParentAsync(cmd);
 
         Assert.True(outcome.Success);
-        Assert.Equal(201, outcome.HttpStatus);
-        Assert.NotNull(outcome.Payload);
-        Assert.Equal("family", outcome.Payload!.TenantType);
-        Assert.Contains("parent", outcome.Payload.Roles);
-        // Registration returns a placeholder envelope — no tokens until verify + login.
-        Assert.Equal(string.Empty, outcome.Payload.AccessToken);
+        Assert.Equal(202, outcome.HttpStatus);
+        Assert.NotNull(outcome.PendingPayload);
+        Assert.False(string.IsNullOrWhiteSpace(outcome.PendingPayload!.PendingId));
+        Assert.False(string.IsNullOrWhiteSpace(outcome.PendingPayload.Nonce));
 
-        var tenant = await h.Db.IdentityTenants.IgnoreQueryFilters()
-            .SingleAsync(t => t.Type == TenantType.Family);
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .SingleAsync(u => u.TenantId == tenant.Id);
-        Assert.Equal(UserStatus.PendingEmailVerification, user.Status);
-        Assert.Equal("parent@example.com", user.NormalizedEmail);
-        Assert.NotNull(user.PasswordHash);
+        // No User row yet — that lands when payment confirms.
+        Assert.False(await h.Db.IdentityUsers.IgnoreQueryFilters()
+            .AnyAsync(u => u.NormalizedEmail == "parent@example.com"));
+        // Family tenant is also deferred until payment confirmation.
+        Assert.False(await h.Db.IdentityTenants.IgnoreQueryFilters()
+            .AnyAsync(t => t.Type == TenantType.Family));
 
-        // Exactly one email-verification notification was dispatched.
-        Assert.Single(h.Notifications.Dispatched);
-        var record = h.Notifications.Dispatched[0];
-        Assert.Equal("email_verification", record.Kind);
-        Assert.StartsWith("http://test.local/verify-email?token=", record.Link);
+        // No verification email yet — sent post-payment.
+        Assert.Empty(h.Notifications.Dispatched);
 
-        // Audit: register_parent succeeded.
-        Assert.Contains(h.Audit.Events, e => e.Action == "register_parent" && e.Outcome == "succeeded");
+        // Audit: register_parent_pending emitted with pending_payment outcome.
+        Assert.Contains(h.Audit.Events, e =>
+            e.Action == "register_parent_pending" && e.Outcome == "pending_payment");
+
+        // Pending row written with normalized email + hashed password.
+        var pending = await h.Db.PendingRegistrations
+            .SingleAsync(p => p.NormalizedEmail == "parent@example.com");
+        Assert.False(string.IsNullOrWhiteSpace(pending.PasswordHash));
+        Assert.NotEqual("HorseBatteryStaple!77", pending.PasswordHash);
     }
 
     [Fact]
@@ -132,11 +137,12 @@ public class RegisterParentContractTests
     {
         using var h = await IdentityTestHarness.CreateAsync();
 
-        var cmd = NewRegisterCommand("dup@example.com");
-        var first = await h.AuthService.RegisterParentAsync(cmd);
-        Assert.True(first.Success);
+        // Seed a real, fully-provisioned parent that owns "dup@example.com".
+        // This mirrors the post-payment state — the duplicate guard inside
+        // RegisterParentAsync looks at IdentityUsers, not PendingRegistrations.
+        await h.SeedVerifiedParentAsync("dup@example.com");
 
-        var second = await h.AuthService.RegisterParentAsync(cmd with { CorrelationId = Guid.NewGuid().ToString("D") });
+        var second = await h.AuthService.RegisterParentAsync(NewRegisterCommand("dup@example.com"));
         Assert.False(second.Success);
         Assert.Equal(409, second.HttpStatus);
         Assert.Equal("email_taken", second.ErrorCode);

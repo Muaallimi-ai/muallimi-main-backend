@@ -60,6 +60,12 @@ public static class IdentityModelConfiguration
             e.Property(x => x.PasswordHash).HasColumnName("password_hash").HasMaxLength(500);
             e.Property(x => x.PasswordChangedAt).HasColumnName("password_changed_at");
             e.Property(x => x.RequiresPasswordReset).HasColumnName("requires_password_reset");
+            e.Property(x => x.PasswordHashVersion)
+                .HasColumnName("password_hash_version")
+                .HasDefaultValue(0)
+                .IsConcurrencyToken();
+            e.Property(x => x.AgeTransitionNotifiedAt).HasColumnName("age_transition_notified_at");
+            e.Property(x => x.PendingParentResetNoticeAt).HasColumnName("pending_parent_reset_notice_at");
             e.Property(x => x.TwoFactorEnabled).HasColumnName("two_factor_enabled");
             e.Property(x => x.Locale).HasColumnName("locale").HasMaxLength(5);
             e.Property(x => x.Status).HasColumnName("status").HasConversion<int>();

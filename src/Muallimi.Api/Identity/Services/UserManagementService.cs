@@ -6,12 +6,16 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Muallimi.Application.Audit;
+using Muallimi.Application.Common;
 using Muallimi.Application.Identity.Commands;
+using Muallimi.Application.Identity.Credentials;
 using Muallimi.Application.Identity.Dtos;
 using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
+using Muallimi.Application.Identity.Validators;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
+using Muallimi.Domain.Parents;
 using Muallimi.Domain.StudentExperience;
 using Muallimi.Infrastructure.Persistence;
 
@@ -36,6 +40,15 @@ public interface IUserManagementService
     Task<ChildOperationResult<ChildDetail>> UpdateChildAsync(UpdateChildCommand cmd, CancellationToken ct = default);
     Task<ChildOperationResult<ChildCredentialsOnce>> RegenerateChildPasswordAsync(RegenerateChildPasswordCommand cmd, CancellationToken ct = default);
     Task<ChildOperationResult<object>> DeleteChildAsync(DeleteChildCommand cmd, CancellationToken ct = default);
+
+    /// <summary>Phase 9 Phase 3: parent resets the 4-digit PIN for an 8–12 child.</summary>
+    Task<ChildOperationResult<object>> ResetChildPinAsync(ResetChildPinCommand cmd, CancellationToken ct = default);
+
+    /// <summary>Phase 9 Phase 3: parent adds a PIN on a child's 8th-birthday tier transition.</summary>
+    Task<ChildOperationResult<object>> AddChildPinAsync(AddChildPinCommand cmd, CancellationToken ct = default);
+
+    /// <summary>Phase 9 Phase 3: parent upgrades an 8–12 PIN child to the 13+ password tier.</summary>
+    Task<ChildOperationResult<object>> UpgradeChildToPasswordAsync(UpgradeChildToPasswordCommand cmd, CancellationToken ct = default);
 
     /// <summary>Add-child redesign Phase 6: parent-only unlock for a Locked child (post-PIN-failure).</summary>
     Task<ChildOperationResult<object>> UnlockChildAsync(UnlockChildCommand cmd, CancellationToken ct = default);
@@ -68,6 +81,14 @@ public sealed record ChildOperationResult<T>(
             ErrorCode: code);
 }
 
+/// <summary>
+/// Result row for the duplicate-child match search. Surfaced inside
+/// <see cref="UserManagementService.CreateChildAsync"/> as the 409
+/// `duplicate_child` envelope so the parent can open the existing child
+/// or confirm "twins — add anyway".
+/// </summary>
+internal sealed record DuplicateChildMatch(Guid ChildId, string FullName);
+
 public sealed class UserManagementService : IUserManagementService
 {
     private readonly MuallimiDbContext _db;
@@ -79,6 +100,10 @@ public sealed class UserManagementService : IUserManagementService
     private readonly ILogger<UserManagementService> _logger;
     private readonly IWeakPinBlocklist _weakPinBlocklist;
 
+    private readonly IManagerReAuthService _reauth;
+    private readonly ICredentialAuditWriter _credentialAudit;
+    private readonly IPasswordStrengthValidator _passwordStrength;
+
     public UserManagementService(
         MuallimiDbContext db,
         IPasswordService passwords,
@@ -87,7 +112,10 @@ public sealed class UserManagementService : IUserManagementService
         AuditEventEmitter audit,
         IIdentityNotificationSender notifications,
         ILogger<UserManagementService> logger,
-        IWeakPinBlocklist weakPinBlocklist)
+        IWeakPinBlocklist weakPinBlocklist,
+        IManagerReAuthService reauth,
+        ICredentialAuditWriter credentialAudit,
+        IPasswordStrengthValidator passwordStrength)
     {
         _db = db;
         _passwords = passwords;
@@ -97,6 +125,9 @@ public sealed class UserManagementService : IUserManagementService
         _notifications = notifications;
         _logger = logger;
         _weakPinBlocklist = weakPinBlocklist;
+        _reauth = reauth;
+        _credentialAudit = credentialAudit;
+        _passwordStrength = passwordStrength;
     }
 
     public async Task<ChildOperationResult<ChildCredentialsOnce>> CreateChildAsync(CreateChildCommand cmd, CancellationToken ct = default)
@@ -110,6 +141,85 @@ public sealed class UserManagementService : IUserManagementService
         if (parent.TenantId != cmd.ParentTenantId)
         {
             return ChildOperationResult<ChildCredentialsOnce>.Fail(403, "tenant_mismatch", "غير مصرّح.");
+        }
+
+        // Phase 9 follow-up — duplicate-child detection. Match key is the
+        // normalized full-name + (birth year, birth month) scoped to THIS
+        // parent's children only (not tenant-wide; in the B2C tenant
+        // multiple unrelated parents legitimately have kids with the
+        // same name + birthday). Twins are handled via the parent
+        // re-submitting with `ConfirmDuplicate=true` after the dialog.
+        //
+        // We normalize Arabic in-process because the DB has no
+        // collation function for the alif/ya/ta-marbuta folding we need.
+        // Per parent there are typically 1-5 siblings, so the in-memory
+        // scan is cheap.
+        DuplicateChildMatch? duplicate = null;
+        var normalizedNewName = NameNormalization.NormalizeArabic(cmd.FullName);
+        if (!string.IsNullOrEmpty(normalizedNewName))
+        {
+            var siblings = await (
+                from u in _db.IdentityUsers.IgnoreQueryFilters()
+                join p in _db.StudentProfiles.IgnoreQueryFilters() on u.Id equals p.UserId into joined
+                from p in joined.DefaultIfEmpty()
+                where u.ManagedByUserId == cmd.ParentUserId
+                   && u.AccountType == AccountType.Managed
+                   && u.Status != UserStatus.Archived
+                select new { u.Id, u.FullName, Birthday = p == null ? (DateOnly?)null : p.Birthday }
+            ).ToListAsync(ct).ConfigureAwait(false);
+
+            duplicate = siblings
+                .Where(s =>
+                    NameNormalization.NormalizeArabic(s.FullName) == normalizedNewName
+                    && s.Birthday.HasValue
+                    && s.Birthday.Value.Year == cmd.BirthYear
+                    && s.Birthday.Value.Month == cmd.BirthMonth)
+                .Select(s => new DuplicateChildMatch(s.Id, s.FullName))
+                .FirstOrDefault();
+
+            if (duplicate is not null && !cmd.ConfirmDuplicate)
+            {
+                // First attempt — surface the conflict so the parent can
+                // either open the existing child or confirm "this is a
+                // different child (twins)". The existing-child id is
+                // packed into ApiResponseError.Field; the human-readable
+                // name goes in Message. The frontend looks for code
+                // `duplicate_child` to trigger the picker dialog.
+                return new ChildOperationResult<ChildCredentialsOnce>(
+                    Success: false,
+                    HttpStatus: 409,
+                    Message: $"الطفل {duplicate.FullName} موجود مسبقًا.",
+                    Errors: new[]
+                    {
+                        new ApiResponseError
+                        {
+                            Code = "duplicate_child",
+                            Field = duplicate.ChildId.ToString("D"),
+                            Message = duplicate.FullName,
+                        },
+                    },
+                    ErrorCode: "duplicate_child");
+            }
+
+            if (duplicate is not null && cmd.ConfirmDuplicate)
+            {
+                // Parent explicitly re-submitted "Add anyway" — log the
+                // override BEFORE we try to create so we have a trail
+                // even if creation later fails. The audit row will
+                // outlive the request via AuditEventEmitter's outbox.
+                _audit.Emit(new AuditEvent
+                {
+                    EventCategory = AuthEventCategory.Register.ToString(),
+                    ActorId = parent.Id.ToString("D"),
+                    TenantId = parent.TenantId.ToString("D"),
+                    Action = "child_duplicate_override",
+                    TargetType = "User",
+                    TargetId = duplicate.ChildId.ToString("D"),
+                    Outcome = "succeeded",
+                    CorrelationId = cmd.CorrelationId,
+                    Reason = $"Parent confirmed duplicate add for name='{cmd.FullName}' birth={cmd.BirthYear}/{cmd.BirthMonth} (existing child {duplicate.ChildId:D}).",
+                });
+            }
         }
 
         string username;
@@ -163,6 +273,7 @@ public sealed class UserManagementService : IUserManagementService
                 }
                 else
                 {
+                    plaintextPasswordToReturn = cmd.CustomPassword;
                     passwordHash = _passwords.Hash(cmd.CustomPassword);
                 }
                 break;
@@ -251,6 +362,38 @@ public sealed class UserManagementService : IUserManagementService
         };
         _db.IdentityParentalConsents.Add(consent);
 
+        // Phase 4 ↔ Phase 9 bridge: every parent surface (notifications inbox,
+        // dashboard tiles, weekly report) filters by ChildLink. Without this
+        // row, child-scoped notifications fan out (the email arrives) but
+        // never surface in the parent's inbox or dashboard. Look up the
+        // ParentProfile by user id and create a guardian-role link covering
+        // an open-ended effective window.
+        var parentProfileId = await _db.ParentProfiles.IgnoreQueryFilters()
+            .Where(p => p.UserId == parent.Id)
+            .Select(p => (Guid?)p.ParentProfileId)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (parentProfileId is { } pid)
+        {
+            _db.ChildLinks.Add(new ChildLink
+            {
+                ChildLinkId = Guid.NewGuid(),
+                TenantId = parent.TenantId,
+                ParentProfileId = pid,
+                StudentId = child.Id,
+                Role = "guardian",
+                EffectiveStart = now.Date,
+                EffectiveEnd = null,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        else
+        {
+            _logger.LogWarning(
+                "ParentProfile missing for parent {ParentId} when creating child {ChildId} — inbox visibility deferred until Phase 4 backfill",
+                parent.Id, child.Id);
+        }
+
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
@@ -332,6 +475,7 @@ public sealed class UserManagementService : IUserManagementService
                 Gender = p?.Gender,
                 AvatarEmoji = p?.AvatarReference,
                 AvatarBgColor = p?.AvatarBgColor,
+                Birthday = p?.Birthday,
                 LoginMethod = u.LoginMethod,
                 Status = u.Status.ToString().ToLowerInvariant(),
                 LastLoginAt = u.LastLoginAt,
@@ -415,7 +559,7 @@ public sealed class UserManagementService : IUserManagementService
                 TenantId = child.TenantId,
                 UserId = child.Id,
                 DisplayName = child.FullName,
-                CurriculumType = "MOE-EG",
+                CurriculumType = string.IsNullOrWhiteSpace(cmd.CurriculumType) ? "MOE-EG" : cmd.CurriculumType,
                 Grade = cmd.Grade.HasValue
                     ? cmd.Grade.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     : string.Empty,
@@ -427,6 +571,9 @@ public sealed class UserManagementService : IUserManagementService
                     ? DateOnly.FromDateTime(cmd.Birthday.Value)
                     : null,
                 Gender = string.IsNullOrWhiteSpace(cmd.Gender) ? null : cmd.Gender,
+                AvatarReference = string.IsNullOrWhiteSpace(cmd.AvatarEmoji) ? null : cmd.AvatarEmoji,
+                AvatarBgColor = string.IsNullOrWhiteSpace(cmd.AvatarBgColor) ? null : cmd.AvatarBgColor,
+                SchoolName = string.IsNullOrWhiteSpace(cmd.SchoolName) ? null : cmd.SchoolName.Trim(),
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -444,6 +591,17 @@ public sealed class UserManagementService : IUserManagementService
                 profile.Birthday = DateOnly.FromDateTime(cmd.Birthday.Value);
             if (!string.IsNullOrWhiteSpace(cmd.FullName))
                 profile.DisplayName = child.FullName;
+            // EditChildDrawer profile-only fields: emoji, color,
+            // curriculum, school. Null = "leave alone"; whitespace
+            // schoolName clears it (parent removed it from the form).
+            if (!string.IsNullOrWhiteSpace(cmd.AvatarEmoji))
+                profile.AvatarReference = cmd.AvatarEmoji;
+            if (!string.IsNullOrWhiteSpace(cmd.AvatarBgColor))
+                profile.AvatarBgColor = cmd.AvatarBgColor;
+            if (!string.IsNullOrWhiteSpace(cmd.CurriculumType))
+                profile.CurriculumType = cmd.CurriculumType;
+            if (cmd.SchoolName is not null)
+                profile.SchoolName = string.IsNullOrWhiteSpace(cmd.SchoolName) ? null : cmd.SchoolName.Trim();
             profile.UpdatedAt = now;
         }
 
@@ -503,36 +661,52 @@ public sealed class UserManagementService : IUserManagementService
 
     public async Task<ChildOperationResult<ChildCredentialsOnce>> RegenerateChildPasswordAsync(RegenerateChildPasswordCommand cmd, CancellationToken ct = default)
     {
-        var child = await _db.IdentityUsers.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(u => u.Id == cmd.ChildUserId
-                && u.ManagedByUserId == cmd.ParentUserId
-                && u.AccountType == AccountType.Managed, ct).ConfigureAwait(false);
+        // Phase 9 Phase 3 hardening: re-auth gate, tier guard, credential
+        // audit, post-reset notice, optimistic concurrency. The plaintext
+        // generation + once-only payload remain — that's the existing US2
+        // contract and unchanged.
+        if (!await _reauth.HasRecentReAuthAsync(cmd.ParentUserId, ct).ConfigureAwait(false))
+            return ChildOperationResult<ChildCredentialsOnce>.Fail(401, "reauth_required", "يرجى التحقق من هويتك أولًا.");
+
+        var child = await LoadOwnedChildAsync(cmd.ParentUserId, cmd.ChildUserId, ct).ConfigureAwait(false);
         if (child is null)
-        {
             return ChildOperationResult<ChildCredentialsOnce>.Fail(404, "child_not_found", "الطفل غير موجود.");
-        }
         if (child.Status == UserStatus.Archived)
-        {
             return ChildOperationResult<ChildCredentialsOnce>.Fail(409, "child_archived", "الحساب محذوف.");
-        }
+        if (child.LoginMethod != LoginMethods.UsernamePassword)
+            return ChildOperationResult<ChildCredentialsOnce>.Fail(409, "tier_mismatch", "لا يمكن تنفيذ هذه العملية على هذا الحساب.");
 
         var plaintext = string.IsNullOrEmpty(cmd.CustomPassword)
             ? _passwordGenerator.Generate(cmd.PasswordLocale)
             : cmd.CustomPassword;
 
-        child.CompletePasswordReset(_passwords.Hash(plaintext));
-
-        // Revoke every live refresh token for this child so the old
-        // password can never be used again even with a stale refresh.
-        var liveTokens = await _db.IdentityRefreshTokens.IgnoreQueryFilters()
-            .Where(t => t.UserId == child.Id && t.RevokedAt == null)
-            .ToListAsync(ct).ConfigureAwait(false);
-        foreach (var t in liveTokens)
+        // Strength check on parent-supplied custom passwords (zxcvbn ≥ 3).
+        // Generated passwords are guaranteed strong by ChildPasswordGenerator.
+        if (!string.IsNullOrEmpty(cmd.CustomPassword))
         {
-            t.MarkFamilyRevoked();
+            var inputs = new[] { child.Username ?? string.Empty, child.FullName ?? string.Empty };
+            var strength = _passwordStrength.Evaluate(cmd.CustomPassword, inputs);
+            if (!strength.IsAcceptable)
+            {
+                return ChildOperationResult<ChildCredentialsOnce>.Fail(422, "weak_password",
+                    string.Equals(child.Locale, "en", StringComparison.OrdinalIgnoreCase) ? strength.FeedbackEn : strength.FeedbackAr);
+            }
         }
 
-        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+        child.CompletePasswordReset(_passwords.Hash(plaintext));
+        child.MarkPendingParentResetNotice();
+
+        await RevokeChildRefreshTokensAsync(child.Id, ct).ConfigureAwait(false);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return ChildOperationResult<ChildCredentialsOnce>.Fail(409, "concurrency_conflict",
+                "تم تغيير كلمة المرور من جلسة أخرى — أعد المحاولة.");
+        }
 
         _audit.Emit(new AuditEvent
         {
@@ -545,6 +719,9 @@ public sealed class UserManagementService : IUserManagementService
             Outcome = "succeeded",
             CorrelationId = cmd.CorrelationId,
         });
+        await EmitCredentialAuditAsync(
+            CredentialAuditEventKind.ParentResetChildPassword,
+            cmd.ParentUserId, child, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId, ct).ConfigureAwait(false);
 
         return ChildOperationResult<ChildCredentialsOnce>.Ok(new ChildCredentialsOnce
         {
@@ -556,6 +733,166 @@ public sealed class UserManagementService : IUserManagementService
             TenantId = child.TenantId.ToString("D"),
             CreatedAt = child.CreatedAt,
         }, "تم إنشاء كلمة مرور جديدة.");
+    }
+
+    // ── Phase 9 Phase 3: parent reset / add / upgrade ─────────────────
+
+    public Task<ChildOperationResult<object>> ResetChildPinAsync(ResetChildPinCommand cmd, CancellationToken ct = default)
+        => ExecuteCredentialActionAsync(
+            cmd.ParentUserId, cmd.ChildUserId, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId,
+            requiredTier: LoginMethods.Pin,
+            validateAsync: (child, cct) => ValidatePinAsync(child, cmd.NewPin, cct),
+            mutate: child => child.SetPin(_passwords.Hash(cmd.NewPin)),
+            auditKind: CredentialAuditEventKind.ParentResetChildPin,
+            stampPendingNotice: true,
+            successMessage: "تم إعادة تعيين رمز PIN.",
+            ct);
+
+    public Task<ChildOperationResult<object>> AddChildPinAsync(AddChildPinCommand cmd, CancellationToken ct = default)
+        => ExecuteCredentialActionAsync(
+            cmd.ParentUserId, cmd.ChildUserId, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId,
+            requiredTier: LoginMethods.ProfileSwitchOnly,
+            validateAsync: (child, cct) => ValidatePinAsync(child, cmd.NewPin, cct),
+            mutate: child => child.AddPinForUnderEight(_passwords.Hash(cmd.NewPin)),
+            auditKind: CredentialAuditEventKind.ParentAddedChildPin,
+            stampPendingNotice: false,  // child has no prior session to "notice"
+            successMessage: "تم إضافة رقم PIN.",
+            ct);
+
+    public Task<ChildOperationResult<object>> UpgradeChildToPasswordAsync(UpgradeChildToPasswordCommand cmd, CancellationToken ct = default)
+        => ExecuteCredentialActionAsync(
+            cmd.ParentUserId, cmd.ChildUserId, cmd.IpAddress, cmd.UserAgent, cmd.CorrelationId,
+            requiredTier: LoginMethods.Pin,
+            validateAsync: (child, cct) => Task.FromResult(ValidatePasswordStrength(child, cmd.NewPassword)),
+            mutate: child => child.UpgradePinToPassword(_passwords.Hash(cmd.NewPassword)),
+            auditKind: CredentialAuditEventKind.ParentUpgradedChildToPassword,
+            stampPendingNotice: true,
+            successMessage: "تم ترقية الحساب إلى كلمة مرور.",
+            ct);
+
+    // ── Shared helpers (single-source the credential pipeline) ─────────
+
+    private async Task<User?> LoadOwnedChildAsync(Guid parentUserId, Guid childUserId, CancellationToken ct)
+        => await _db.IdentityUsers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(
+                u => u.Id == childUserId
+                  && u.ManagedByUserId == parentUserId
+                  && u.AccountType == AccountType.Managed,
+                ct).ConfigureAwait(false);
+
+    private async Task RevokeChildRefreshTokensAsync(Guid childId, CancellationToken ct)
+    {
+        var liveTokens = await _db.IdentityRefreshTokens.IgnoreQueryFilters()
+            .Where(t => t.UserId == childId && t.RevokedAt == null)
+            .ToListAsync(ct).ConfigureAwait(false);
+        foreach (var t in liveTokens) t.MarkFamilyRevoked();
+    }
+
+    private async Task<ChildOperationResult<object>> ExecuteCredentialActionAsync(
+        Guid parentUserId,
+        Guid childUserId,
+        string ipAddress,
+        string? userAgent,
+        string correlationId,
+        string requiredTier,
+        Func<User, CancellationToken, Task<ChildOperationResult<object>?>> validateAsync,
+        Action<User> mutate,
+        CredentialAuditEventKind auditKind,
+        bool stampPendingNotice,
+        string successMessage,
+        CancellationToken ct)
+    {
+        // 1) Re-auth recency gate.
+        if (!await _reauth.HasRecentReAuthAsync(parentUserId, ct).ConfigureAwait(false))
+            return ChildOperationResult<object>.Fail(401, "reauth_required", "يرجى التحقق من هويتك أولًا.");
+
+        // 2) Load child + verify ownership.
+        var child = await LoadOwnedChildAsync(parentUserId, childUserId, ct).ConfigureAwait(false);
+        if (child is null || child.Status == UserStatus.Archived)
+            return ChildOperationResult<object>.Fail(404, "child_not_found", "الحساب غير موجود.");
+
+        // 3) Tier guard.
+        if (!string.Equals(child.LoginMethod, requiredTier, StringComparison.Ordinal))
+            return ChildOperationResult<object>.Fail(409, "tier_mismatch", "لا يمكن تنفيذ هذه العملية على هذا الحساب.");
+
+        // 4) Action-specific validation.
+        var validationFailure = await validateAsync(child, ct).ConfigureAwait(false);
+        if (validationFailure is not null) return validationFailure;
+
+        // 5) + 6) Apply mutation + post-reset notice.
+        mutate(child);
+        if (stampPendingNotice) child.MarkPendingParentResetNotice();
+        await RevokeChildRefreshTokensAsync(child.Id, ct).ConfigureAwait(false);
+
+        // 7) Save — DbUpdateConcurrencyException → HTTP 409.
+        try
+        {
+            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return ChildOperationResult<object>.Fail(409, "concurrency_conflict",
+                "تم تغيير كلمة المرور من جلسة أخرى — أعد المحاولة.");
+        }
+
+        // 8) Credential audit (DB-backed, PII-masked).
+        await EmitCredentialAuditAsync(auditKind, parentUserId, child, ipAddress, userAgent, correlationId, ct).ConfigureAwait(false);
+
+        return ChildOperationResult<object>.Ok(new { ok = true }, successMessage);
+    }
+
+    private async Task EmitCredentialAuditAsync(
+        CredentialAuditEventKind kind,
+        Guid actorParentId,
+        User child,
+        string ipAddress,
+        string? userAgent,
+        string correlationId,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _credentialAudit.WriteAsync(new CredentialAuditEvent
+            {
+                Kind = kind,
+                TenantId = child.TenantId,
+                ActorId = actorParentId,
+                ActorType = CredentialAuditActorTypes.User,
+                TargetUserId = child.Id,
+                CorrelationId = correlationId,
+                IpAddress = ipAddress,
+                UserAgent = userAgent,
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to write credential audit (kind {Kind}, child {ChildId})", kind, child.Id);
+        }
+    }
+
+    private ChildOperationResult<object>? ValidatePasswordStrength(User child, string newPassword)
+    {
+        if (string.IsNullOrWhiteSpace(newPassword))
+            return ChildOperationResult<object>.Fail(422, "weak_password", "كلمة المرور مطلوبة.");
+        var inputs = new[] { child.Username ?? string.Empty, child.FullName ?? string.Empty };
+        var strength = _passwordStrength.Evaluate(newPassword, inputs);
+        if (!strength.IsAcceptable)
+        {
+            return ChildOperationResult<object>.Fail(422, "weak_password",
+                string.Equals(child.Locale, "en", StringComparison.OrdinalIgnoreCase) ? strength.FeedbackEn : strength.FeedbackAr);
+        }
+        return null;
+    }
+
+    private async Task<ChildOperationResult<object>?> ValidatePinAsync(User child, string newPin, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(newPin) || newPin.Length != 4 || !int.TryParse(newPin, out _))
+            return ChildOperationResult<object>.Fail(422, "invalid_pin", "رمز PIN يجب أن يكون 4 أرقام.");
+        var profile = await _db.StudentProfiles.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.UserId == child.Id, ct).ConfigureAwait(false);
+        if (_weakPinBlocklist.IsWeak(newPin, profile?.Birthday?.Year))
+            return ChildOperationResult<object>.Fail(422, "weak_pin", "هذا الرقم شائع جدًا — اختر رقمًا أصعب.");
+        return null;
     }
 
     public async Task<ChildOperationResult<object>> DeleteChildAsync(DeleteChildCommand cmd, CancellationToken ct = default)

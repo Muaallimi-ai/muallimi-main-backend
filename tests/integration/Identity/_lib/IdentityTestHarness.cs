@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Muallimi.Api.Identity.Services;
 using Muallimi.Application.Audit;
+using Muallimi.Application.Identity.Credentials;
 using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
 using Muallimi.Application.Identity.Validators;
@@ -138,9 +139,14 @@ public sealed class IdentityTestHarness : IDisposable
             twoFactorMgmt);
 
         var resetLinkBuilder = new PasswordResetLinkBuilder("http://test.local");
+        var passwordStrength = new ZxcvbnPasswordStrengthValidator();
+        var credentialAudit = new InMemoryCredentialAuditWriter();
+        var reauth = new AlwaysFreshManagerReAuth();
+        var childNotifier = new CapturingChildCredentialNotifier();
         var pwReset = new PasswordResetService(
             db, passwords, sessions, sessionCascade, audit.Emitter, notifications,
-            resetLinkBuilder, NullLogger<PasswordResetService>.Instance);
+            resetLinkBuilder, rateLimit, passwordStrength, credentialAudit, reauth, childNotifier,
+            NullLogger<PasswordResetService>.Instance);
 
         var impersonation = new Muallimi.Api.Identity.Services.ImpersonationService(
             db, tokens, audit.Emitter, profileIds,
@@ -257,6 +263,63 @@ public sealed class IdentityTestHarness : IDisposable
         await Db.SaveChangesAsync(ct).ConfigureAwait(false);
         return (userId, tenant.Id);
     }
+
+    /// <summary>
+    /// Seeds a Family-tenant parent in <see cref="UserStatus.PendingEmailVerification"/>
+    /// — used by tests that exercise the email-verification flow itself
+    /// (where <see cref="IAuthService.RegisterParentAsync"/> no longer
+    /// creates a User synchronously due to the Paymob 2-phase pattern).
+    /// </summary>
+    public async Task<(Guid UserId, Guid TenantId)> SeedUnverifiedParentAsync(
+        string email,
+        string password = "HorseBatteryStaple!77",
+        CancellationToken ct = default)
+    {
+        var normalized = email.Trim().ToLowerInvariant();
+        var tenant = new Tenant
+        {
+            Id = Guid.NewGuid(),
+            Type = TenantType.Family,
+            DisplayName = email,
+            Locale = "ar",
+            Status = TenantStatus.Active,
+            Metadata = "{}",
+            CreatedAt = DateTime.UtcNow,
+        };
+        Db.IdentityTenants.Add(tenant);
+
+        var userId = Guid.NewGuid();
+        var user = new User
+        {
+            Id = userId,
+            TenantId = tenant.Id,
+            AccountType = AccountType.Personal,
+            Email = email.Trim(),
+            NormalizedEmail = normalized,
+            FullName = "الوالد " + email,
+            Locale = "ar",
+            Status = UserStatus.PendingEmailVerification,
+            PasswordHash = Passwords.Hash(password),
+            PasswordChangedAt = DateTime.UtcNow,
+            EmailVerified = false,
+            CreatedAt = DateTime.UtcNow,
+        };
+        Db.IdentityUsers.Add(user);
+
+        var parentRole = await Db.IdentityRoles.IgnoreQueryFilters()
+            .SingleAsync(r => r.Name == "parent", ct).ConfigureAwait(false);
+        Db.IdentityUserRoles.Add(new UserRole
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            RoleId = parentRole.Id,
+            TenantId = tenant.Id,
+            GrantedBy = userId,
+            GrantedAt = DateTime.UtcNow,
+        });
+        await Db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return (userId, tenant.Id);
+    }
 }
 
 /// <summary>
@@ -343,6 +406,27 @@ public sealed class InMemoryNotificationSpy : IIdentityNotificationSender
         return Task.FromResult(Receipt());
     }
 
+    public Task<Muallimi.Application.Notifications.Channels.NotificationDispatchReceipt> SendChildPasswordChangedByChildAsync(
+        IdentityNotificationRecipient parentRecipient, string childName, string childGrade, string childUsername, DateTime changeTimeUtc, string correlationId, CancellationToken ct = default)
+    {
+        Dispatched.Add(new IdentityNotificationRecord("child_password_changed_by_child", parentRecipient, $"{childName}|{childGrade}|{childUsername}|{changeTimeUtc:O}", correlationId));
+        return Task.FromResult(Receipt());
+    }
+
+    public Task<Muallimi.Application.Notifications.Channels.NotificationDispatchReceipt> SendChildBirthdayPinEligibleAsync(
+        IdentityNotificationRecipient parentRecipient, string childName, string correlationId, CancellationToken ct = default)
+    {
+        Dispatched.Add(new IdentityNotificationRecord("child_birthday_pin_eligible", parentRecipient, childName, correlationId));
+        return Task.FromResult(Receipt());
+    }
+
+    public Task<Muallimi.Application.Notifications.Channels.NotificationDispatchReceipt> SendChildBirthdayPasswordEligibleAsync(
+        IdentityNotificationRecipient parentRecipient, string childName, string correlationId, CancellationToken ct = default)
+    {
+        Dispatched.Add(new IdentityNotificationRecord("child_birthday_password_eligible", parentRecipient, childName, correlationId));
+        return Task.FromResult(Receipt());
+    }
+
     private static Muallimi.Application.Notifications.Channels.NotificationDispatchReceipt Receipt()
         => new(Guid.NewGuid().ToString("D"), "email");
 }
@@ -352,3 +436,74 @@ public sealed record IdentityNotificationRecord(
     IdentityNotificationRecipient Recipient,
     string Link,
     string CorrelationId);
+
+/// <summary>
+/// In-memory stand-in for <see cref="ICredentialAuditWriter"/>. Captures
+/// every credential audit event so tests can assert on the kinds emitted
+/// (e.g. <c>child_password_changed_self</c>, rejection reasons) without
+/// needing the real Phase 6 <c>AuditTrailWriter</c> + DB.
+/// </summary>
+public sealed class InMemoryCredentialAuditWriter : ICredentialAuditWriter
+{
+    public List<CredentialAuditEvent> Events { get; } = new();
+
+    public Task WriteAsync(CredentialAuditEvent evt, CancellationToken ct = default)
+    {
+        Events.Add(evt);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Test stub for <see cref="IManagerReAuthService"/>. By default
+/// <c>HasRecentReAuthAsync</c> returns true so existing tests that
+/// were written before re-auth landed continue to pass without
+/// pre-stamping a receipt. Tests that exercise the re-auth gate
+/// directly can flip <see cref="HasRecentResult"/>.
+/// </summary>
+public sealed class AlwaysFreshManagerReAuth : IManagerReAuthService
+{
+    public bool HasRecentResult { get; set; } = true;
+    public ManagerReAuthOutcome NextVerifyOutcome { get; set; } = ManagerReAuthOutcome.Success;
+    public List<Guid> Invalidations { get; } = new();
+
+    public Task<bool> HasRecentReAuthAsync(Guid managerUserId, CancellationToken ct = default)
+        => Task.FromResult(HasRecentResult);
+
+    public Task<ManagerReAuthOutcome> VerifyAsync(Guid managerUserId, string password, string? totpCode, CancellationToken ct = default)
+        => Task.FromResult(NextVerifyOutcome);
+
+    public Task InvalidateAsync(Guid managerUserId, CancellationToken ct = default)
+    {
+        Invalidations.Add(managerUserId);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Test stub for <see cref="Muallimi.Api.Identity.Credentials.IChildCredentialNotifier"/>.
+/// Captures every fan-out call so tests can assert on (kind, child)
+/// without a real ParentNotification table or SMTP.
+/// </summary>
+public sealed class CapturingChildCredentialNotifier : Muallimi.Api.Identity.Credentials.IChildCredentialNotifier
+{
+    public List<(string Kind, Guid ChildId, string CorrelationId)> Fired { get; } = new();
+
+    public Task NotifyChildPasswordChangedAsync(Muallimi.Domain.Identity.Entities.User child, string correlationId, CancellationToken ct = default)
+    {
+        Fired.Add(("child_password_changed", child.Id, correlationId));
+        return Task.CompletedTask;
+    }
+
+    public Task NotifyBirthdayPinEligibleAsync(Muallimi.Domain.Identity.Entities.User child, string correlationId, CancellationToken ct = default)
+    {
+        Fired.Add(("child_birthday_pin_eligible", child.Id, correlationId));
+        return Task.CompletedTask;
+    }
+
+    public Task NotifyBirthdayPasswordEligibleAsync(Muallimi.Domain.Identity.Entities.User child, string correlationId, CancellationToken ct = default)
+    {
+        Fired.Add(("child_birthday_password_eligible", child.Id, correlationId));
+        return Task.CompletedTask;
+    }
+}

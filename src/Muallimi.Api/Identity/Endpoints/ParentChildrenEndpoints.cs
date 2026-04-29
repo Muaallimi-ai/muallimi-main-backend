@@ -1,11 +1,13 @@
 using System;
 using System.Linq;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Muallimi.Api.Identity.Services;
 using Muallimi.Application.Identity.Commands;
+using Muallimi.Application.Identity.Credentials;
 using Muallimi.Application.Identity.Dtos;
 using Muallimi.Application.Identity.Services;
 
@@ -34,6 +36,12 @@ public static class ParentChildrenEndpoints
     public const string SessionsSubRoute = "/{id:guid}/sessions";
     public const string LoginHistorySubRoute = "/{id:guid}/login-history";
 
+    // Phase 9 Phase 3 routes
+    public const string ResetPinSubRoute = "/{id:guid}/reset-pin";
+    public const string AddPinSubRoute = "/{id:guid}/add-pin";
+    public const string UpgradeToPasswordSubRoute = "/{id:guid}/upgrade-to-password";
+    public const string ParentReAuthRoute = "/parent/credential/reauth";
+
     public static RouteGroupBuilder MapParentChildrenEndpoints(this RouteGroupBuilder parent)
     {
         parent.MapPost(GroupRoute, HandleCreateChildAsync);
@@ -50,6 +58,12 @@ public static class ParentChildrenEndpoints
         parent.MapGet(GroupRoute + SessionsSubRoute, HandleListChildSessionsAsync);
         parent.MapDelete(GroupRoute + "/{id:guid}/sessions/{sessionId:guid}", HandleRevokeChildSessionAsync);
         parent.MapGet(GroupRoute + LoginHistorySubRoute, HandleGetLoginHistoryAsync);
+
+        // Phase 9 Phase 3 — parent-driven credential management
+        parent.MapPost(GroupRoute + ResetPinSubRoute, HandleResetPinAsync);
+        parent.MapPost(GroupRoute + AddPinSubRoute, HandleAddPinAsync);
+        parent.MapPost(GroupRoute + UpgradeToPasswordSubRoute, HandleUpgradeToPasswordAsync);
+        parent.MapPost(ParentReAuthRoute, HandleParentReAuthAsync);
         return parent;
     }
 
@@ -96,7 +110,8 @@ public static class ParentChildrenEndpoints
             ParentalConsentAcknowledged: request.ParentalConsentAcknowledged,
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            ConfirmDuplicate: request.ConfirmDuplicate);
         var errors = validator.Validate(cmd);
         if (errors.Count > 0)
         {
@@ -183,7 +198,11 @@ public static class ParentChildrenEndpoints
             IpAddress: AuthEndpointHelpers.ResolveIp(http),
             UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
             CorrelationId: correlationId,
-            Username: request.Username);
+            Username: request.Username,
+            AvatarEmoji: request.AvatarEmoji,
+            AvatarBgColor: request.AvatarBgColor,
+            CurriculumType: request.CurriculumType,
+            SchoolName: request.SchoolName);
         var errors = validator.Validate(cmd);
         if (errors.Count > 0)
         {
@@ -453,5 +472,157 @@ public static class ParentChildrenEndpoints
             return AuthEndpointHelpers.StatusEnvelope(result.HttpStatus, result.Payload, result.Message, correlationId);
         }
         return AuthEndpointHelpers.FailEnvelope(result.HttpStatus, result.ErrorCode ?? "operation_failed", result.Message, correlationId, result.Errors);
+    }
+
+    // ── Phase 9 Phase 3 ── Parent credential management ──────────────
+    //
+    // The platform pins JSON to global SnakeCaseLower (see Program.cs
+    // ConfigureHttpJsonOptions). Identity DTOs that the frontend sends
+    // in camelCase MUST carry explicit [JsonPropertyName] attributes —
+    // otherwise the snake_case policy renames `NewPin` → `new_pin` and
+    // the camelCase request body silently arrives as null, the
+    // validator rejects with `new_pin_invalid`, and the dialog falls
+    // back to the generic "unexpected error" message. See the project
+    // memory entry "Backend JSON Naming Policy".
+
+    public sealed class PinRequest
+    {
+        [JsonPropertyName("newPin")]
+        public string? NewPin { get; set; }
+    }
+
+    public sealed class UpgradeToPasswordRequest
+    {
+        [JsonPropertyName("newPassword")]
+        public string? NewPassword { get; set; }
+    }
+
+    public sealed class ParentReAuthRequest
+    {
+        [JsonPropertyName("password")]
+        public string? Password { get; set; }
+
+        [JsonPropertyName("totpCode")]
+        public string? TotpCode { get; set; }
+    }
+
+    private static async Task<IResult> HandleResetPinAsync(
+        Guid id,
+        PinRequest request,
+        HttpContext http,
+        IUserManagementService users,
+        ITokenService tokens,
+        ICommandValidator<ResetChildPinCommand> validator,
+        CancellationToken ct)
+    {
+        var (correlationId, claims, fail) = ResolveParentRequest(http, tokens);
+        if (fail is not null) return fail;
+        var cmd = new ResetChildPinCommand(
+            ParentUserId: claims.UserId,
+            ChildUserId: id,
+            NewPin: request.NewPin ?? string.Empty,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+        return RenderResult(await users.ResetChildPinAsync(cmd, ct).ConfigureAwait(false), correlationId);
+    }
+
+    private static async Task<IResult> HandleAddPinAsync(
+        Guid id,
+        PinRequest request,
+        HttpContext http,
+        IUserManagementService users,
+        ITokenService tokens,
+        ICommandValidator<AddChildPinCommand> validator,
+        CancellationToken ct)
+    {
+        var (correlationId, claims, fail) = ResolveParentRequest(http, tokens);
+        if (fail is not null) return fail;
+        var cmd = new AddChildPinCommand(
+            ParentUserId: claims.UserId,
+            ChildUserId: id,
+            NewPin: request.NewPin ?? string.Empty,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+        return RenderResult(await users.AddChildPinAsync(cmd, ct).ConfigureAwait(false), correlationId);
+    }
+
+    private static async Task<IResult> HandleUpgradeToPasswordAsync(
+        Guid id,
+        UpgradeToPasswordRequest request,
+        HttpContext http,
+        IUserManagementService users,
+        ITokenService tokens,
+        ICommandValidator<UpgradeChildToPasswordCommand> validator,
+        CancellationToken ct)
+    {
+        var (correlationId, claims, fail) = ResolveParentRequest(http, tokens);
+        if (fail is not null) return fail;
+        var cmd = new UpgradeChildToPasswordCommand(
+            ParentUserId: claims.UserId,
+            ChildUserId: id,
+            NewPassword: request.NewPassword ?? string.Empty,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+        return RenderResult(await users.UpgradeChildToPasswordAsync(cmd, ct).ConfigureAwait(false), correlationId);
+    }
+
+    private static async Task<IResult> HandleParentReAuthAsync(
+        ParentReAuthRequest request,
+        HttpContext http,
+        ITokenService tokens,
+        IManagerReAuthService reauth,
+        ICommandValidator<ParentReAuthCommand> validator,
+        CancellationToken ct)
+    {
+        var (correlationId, claims, fail) = ResolveParentRequest(http, tokens);
+        if (fail is not null) return fail;
+        var cmd = new ParentReAuthCommand(
+            ParentUserId: claims.UserId,
+            Password: request.Password ?? string.Empty,
+            TotpCode: request.TotpCode,
+            IpAddress: AuthEndpointHelpers.ResolveIp(http),
+            UserAgent: AuthEndpointHelpers.ResolveUserAgent(http),
+            CorrelationId: correlationId);
+        var errors = validator.Validate(cmd);
+        if (errors.Count > 0)
+            return AuthEndpointHelpers.FailEnvelope(422, "validation_failed", "فشل التحقق من المدخلات.", correlationId, errors);
+
+        var outcome = await reauth.VerifyAsync(claims.UserId, cmd.Password, cmd.TotpCode, ct).ConfigureAwait(false);
+        return outcome switch
+        {
+            ManagerReAuthOutcome.Success => AuthEndpointHelpers.OkEnvelope(
+                new { reauthenticated = true, ttlSeconds = (int)IManagerReAuthService.FreshnessWindow.TotalSeconds },
+                "تم التحقق بنجاح.", correlationId),
+            ManagerReAuthOutcome.RateLimited => AuthEndpointHelpers.FailEnvelope(429, "rate_limited",
+                "محاولات كثيرة جدًا. حاول مرة أخرى لاحقًا.", correlationId),
+            ManagerReAuthOutcome.Locked => AuthEndpointHelpers.FailEnvelope(423, "account_locked",
+                "الحساب مقفول مؤقتًا.", correlationId),
+            ManagerReAuthOutcome.TotpRequired => AuthEndpointHelpers.FailEnvelope(401, "totp_required",
+                "يرجى إدخال رمز التحقق الثنائي.", correlationId),
+            ManagerReAuthOutcome.InvalidTotp => AuthEndpointHelpers.FailEnvelope(401, "invalid_totp",
+                "رمز التحقق الثنائي غير صحيح.", correlationId),
+            _ => AuthEndpointHelpers.FailEnvelope(401, "invalid_credentials",
+                "بيانات الدخول غير صحيحة.", correlationId),
+        };
+    }
+
+    private static (string correlationId, AuthClaims claims, IResult? fail) ResolveParentRequest(HttpContext http, ITokenService tokens)
+    {
+        var correlationId = AuthEndpointHelpers.ResolveCorrelationId(http);
+        if (!TryRequireParent(http, tokens, correlationId, out var claims, out var unauthorized))
+            return (correlationId, default, unauthorized!);
+        return (correlationId, claims, null);
     }
 }

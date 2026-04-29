@@ -224,6 +224,35 @@ public static class IdentityServiceCollectionExtensions
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IPaymentRegistrationService, PaymentRegistrationService>();
 
+        // Credential management: Phase 9 cross-cutting writer (DB-backed,
+        // delegates to Phase 6 AuditTrailWriter so rows persist beyond log rotation)
+        services.AddScoped<Muallimi.Application.Identity.Credentials.ICredentialAuditWriter,
+            Muallimi.Api.Identity.Credentials.CredentialAuditWriter>();
+
+        // Phase 9 Phase 4 — managed-user notification recipient resolver
+        // and the unified credential notifier (in-app inbox + email +
+        // per-day dedup). Reuses the existing IParentNotificationRepository
+        // and IIdentityNotificationSender — no parallel notification path.
+        services.AddScoped<Muallimi.Application.Identity.Credentials.IManagedUserNotificationRecipients,
+            Muallimi.Api.Identity.Credentials.ManagedUserNotificationRecipients>();
+        services.AddScoped<Muallimi.Api.Identity.Credentials.IChildCredentialNotifier,
+            Muallimi.Api.Identity.Credentials.ChildCredentialNotifier>();
+        services.AddHostedService<Muallimi.Api.Identity.Credentials.ChildAgeTransitionJob>();
+
+        // Manager re-auth (parent today, school admin later). Redis when
+        // configured, in-memory fallback for local dev — same dual-binding
+        // pattern as IRateLimitService below.
+        if (!string.IsNullOrWhiteSpace(redisConn))
+        {
+            services.AddScoped<Muallimi.Application.Identity.Credentials.IManagerReAuthService,
+                Muallimi.Api.Identity.Credentials.RedisManagerReAuthService>();
+        }
+        else
+        {
+            services.AddScoped<Muallimi.Application.Identity.Credentials.IManagerReAuthService,
+                Muallimi.Api.Identity.Credentials.InMemoryManagerReAuthService>();
+        }
+
         // Command validators
         services.AddScoped<ICommandValidator<RegisterParentCommand>, RegisterParentCommandValidator>();
         services.AddScoped<ICommandValidator<RegisterSchoolAdminCommand>, RegisterSchoolAdminCommandValidator>();
@@ -241,6 +270,11 @@ public static class IdentityServiceCollectionExtensions
         services.AddScoped<ICommandValidator<UpdateChildCommand>, UpdateChildCommandValidator>();
         services.AddScoped<ICommandValidator<RegenerateChildPasswordCommand>, RegenerateChildPasswordCommandValidator>();
         services.AddScoped<ICommandValidator<DeleteChildCommand>, DeleteChildCommandValidator>();
+        // Phase 9 Phase 3: parent credential management validators
+        services.AddScoped<ICommandValidator<ResetChildPinCommand>, ResetChildPinCommandValidator>();
+        services.AddScoped<ICommandValidator<AddChildPinCommand>, AddChildPinCommandValidator>();
+        services.AddScoped<ICommandValidator<UpgradeChildToPasswordCommand>, UpgradeChildToPasswordCommandValidator>();
+        services.AddScoped<ICommandValidator<ParentReAuthCommand>, ParentReAuthCommandValidator>();
 
         // US5: parent oversight (T141–T150)
         services.AddScoped<ICommandValidator<SuspendChildCommand>, SuspendChildCommandValidator>();

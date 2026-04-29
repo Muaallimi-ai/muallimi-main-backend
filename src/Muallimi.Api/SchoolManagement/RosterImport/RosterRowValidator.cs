@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Muallimi.Application.Common;
 
 namespace Muallimi.Api.SchoolManagement.RosterImport;
 
@@ -120,54 +120,12 @@ public sealed class RosterRowValidator : IRosterRowValidator
     /// </summary>
     public static string ComputeDedupKey(ParsedRosterRow row, int grade)
     {
-        var nameKey = NormaliseArabic(row.StudentNameAr);
+        // Reuse the platform's shared Arabic-name normalizer so this dedup
+        // key matches the parent-managed-child duplicate check character
+        // for character. See `Muallimi.Application.Common.NameNormalization`.
+        var nameKey = NameNormalization.NormalizeArabic(row.StudentNameAr);
         var email = (row.ParentEmail ?? string.Empty).Trim().ToLowerInvariant();
         return $"{nameKey}|{grade}|{email}";
-    }
-
-    private static string NormaliseArabic(string input)
-    {
-        if (string.IsNullOrEmpty(input)) return string.Empty;
-
-        // Strip diacritics (category Mn — combining marks), including the
-        // Arabic harakat range.
-        var decomposed = input.Normalize(NormalizationForm.FormD);
-        var stripped = new StringBuilder(decomposed.Length);
-        foreach (var ch in decomposed)
-        {
-            var cat = CharUnicodeInfo.GetUnicodeCategory(ch);
-            if (cat == UnicodeCategory.NonSpacingMark) continue;
-            stripped.Append(ch);
-        }
-        var flattened = stripped.ToString();
-
-        var mapped = new StringBuilder(flattened.Length);
-        foreach (var ch in flattened)
-        {
-            switch (ch)
-            {
-                case 'أ':
-                case 'إ':
-                case 'آ':
-                case 'ٱ':
-                    mapped.Append('ا');
-                    break;
-                case 'ى':
-                    mapped.Append('ي');
-                    break;
-                case 'ة':
-                    mapped.Append('ه');
-                    break;
-                case 'ـ':
-                    break; // tatweel
-                default:
-                    mapped.Append(ch);
-                    break;
-            }
-        }
-
-        var collapsed = Regex.Replace(mapped.ToString(), @"\s+", " ").Trim();
-        return collapsed.ToLowerInvariant();
     }
 }
 

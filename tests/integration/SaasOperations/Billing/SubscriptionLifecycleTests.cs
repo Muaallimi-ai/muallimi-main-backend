@@ -50,7 +50,8 @@ public class SubscriptionLifecycleTests
         var plan = await SeedPlanAsync(db);
         var tenantId = Guid.NewGuid();
 
-        var sub = await svc.CreateAsync(new SubscriptionCreateInput(tenantId, plan.PlanId, "pm_test", "corr-1"));
+        var sub = await svc.CreateAsync(new SubscriptionCreateInput(
+            tenantId, plan.PlanId, "pm_test", "corr-1", InitialStatus: "trial"));
 
         Assert.Equal("trial", sub.Status);
         Assert.NotNull(sub.TrialEnd);
@@ -64,10 +65,15 @@ public class SubscriptionLifecycleTests
         var (svc, db) = Build();
         var plan = await SeedPlanAsync(db);
         var tenantId = Guid.NewGuid();
-        await svc.CreateAsync(new SubscriptionCreateInput(tenantId, plan.PlanId, "pm_test", "corr-1"));
+        // First create a non-terminal active subscription (trial). The
+        // second call must be rejected because pending_payment is the
+        // ONLY state that gets replaced silently.
+        await svc.CreateAsync(new SubscriptionCreateInput(
+            tenantId, plan.PlanId, "pm_test", "corr-1", InitialStatus: "trial"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            svc.CreateAsync(new SubscriptionCreateInput(tenantId, plan.PlanId, "pm_test", "corr-2")));
+            svc.CreateAsync(new SubscriptionCreateInput(
+                tenantId, plan.PlanId, "pm_test", "corr-2", InitialStatus: "trial")));
     }
 
     [Fact]

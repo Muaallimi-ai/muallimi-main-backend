@@ -35,7 +35,18 @@ public sealed record CreateChildCommand(
     bool ParentalConsentAcknowledged, // explicit checkbox in step 6
     string IpAddress,
     string? UserAgent,
-    string CorrelationId);
+    string CorrelationId,
+    /// <summary>
+    /// Phase 9 follow-up — duplicate-child detection. When the service
+    /// finds a child for the same parent with a matching normalized
+    /// name + birth year/month, the first attempt returns 409
+    /// `duplicate_child` so the parent can choose to open the existing
+    /// child or confirm "this is a different child (twins)". The
+    /// retry from the dialog sets <c>ConfirmDuplicate=true</c> which
+    /// bypasses the dedup check and writes a `duplicate_override`
+    /// audit row so the override is traceable.
+    /// </summary>
+    bool ConfirmDuplicate = false);
 
 public sealed record UpdateChildCommand(
     Guid ParentUserId,
@@ -49,7 +60,15 @@ public sealed record UpdateChildCommand(
     string IpAddress,
     string? UserAgent,
     string CorrelationId,
-    string? Username = null);
+    string? Username = null,
+    // Profile-only fields surfaced by the EditChildDrawer (avatar +
+    // curriculum + school). Each is optional; null means "leave as-is",
+    // empty string clears the value (school name only — emoji and
+    // curriculum cannot be cleared because they are seeded at create).
+    string? AvatarEmoji = null,
+    string? AvatarBgColor = null,
+    string? CurriculumType = null,
+    string? SchoolName = null);
 
 public sealed record UnlockChildCommand(
     Guid ParentUserId,
@@ -82,6 +101,60 @@ public sealed record DeleteChildCommand(
     Guid ParentUserId,
     Guid ParentTenantId,
     Guid ChildUserId,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
+// ── Phase 9 Phase 3: parent-driven credential reset / tier-upgrade ──
+
+/// <summary>
+/// Parent resets the 4-digit PIN for an 8–12 child. Child must be on
+/// the <c>pin</c> tier; goes through re-auth + weak-PIN blocklist.
+/// </summary>
+public sealed record ResetChildPinCommand(
+    Guid ParentUserId,
+    Guid ChildUserId,
+    string NewPin,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
+/// <summary>
+/// Parent adds a PIN for a child who turned 8 (transitions from
+/// <c>profile_switch_only</c> to <c>pin</c>). Goes through re-auth +
+/// weak-PIN blocklist.
+/// </summary>
+public sealed record AddChildPinCommand(
+    Guid ParentUserId,
+    Guid ChildUserId,
+    string NewPin,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
+/// <summary>
+/// Parent upgrades an 8–12 PIN child to the 13+ password tier on
+/// their 13th birthday. Clears PinHash, sets the password hash, and
+/// flips <c>LoginMethod</c> to <c>username_password</c> in one
+/// concurrency-safe mutation.
+/// </summary>
+public sealed record UpgradeChildToPasswordCommand(
+    Guid ParentUserId,
+    Guid ChildUserId,
+    string NewPassword,
+    string IpAddress,
+    string? UserAgent,
+    string CorrelationId);
+
+/// <summary>
+/// Parent step-up re-auth — issues a 5-minute freshness receipt so
+/// destructive credential actions don't prompt for password+TOTP on
+/// every click.
+/// </summary>
+public sealed record ParentReAuthCommand(
+    Guid ParentUserId,
+    string Password,
+    string? TotpCode,
     string IpAddress,
     string? UserAgent,
     string CorrelationId);
@@ -253,6 +326,61 @@ public sealed class DeleteChildCommandValidator : ICommandValidator<DeleteChildC
         var errors = new List<ApiResponseError>();
         if (c.ChildUserId == Guid.Empty)
             errors.Add(new ApiResponseError { Code = "child_id_required", Field = "id", Message = "معرّف الطفل مطلوب." });
+        return errors;
+    }
+}
+
+// ── Phase 9 Phase 3 validators ─────────────────────────────────────
+
+/// <summary>Shared shape check for any 4-digit PIN. Strength check (blocklist) lives in the service.</summary>
+internal static class PinFormat
+{
+    public static readonly System.Text.RegularExpressions.Regex FourDigit = new("^[0-9]{4}$");
+}
+
+public sealed class ResetChildPinCommandValidator : ICommandValidator<ResetChildPinCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(ResetChildPinCommand c)
+        => ValidatePin(c.ChildUserId, c.NewPin);
+
+    internal static IReadOnlyList<ApiResponseError> ValidatePin(Guid childId, string newPin)
+    {
+        var errors = new List<ApiResponseError>();
+        if (childId == Guid.Empty)
+            errors.Add(new ApiResponseError { Code = "child_id_required", Field = "id", Message = "معرّف الطفل مطلوب." });
+        if (string.IsNullOrEmpty(newPin) || !PinFormat.FourDigit.IsMatch(newPin))
+            errors.Add(new ApiResponseError { Code = "new_pin_invalid", Field = "newPin", Message = "رمز PIN الجديد يجب أن يكون 4 أرقام." });
+        return errors;
+    }
+}
+
+public sealed class AddChildPinCommandValidator : ICommandValidator<AddChildPinCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(AddChildPinCommand c)
+        => ResetChildPinCommandValidator.ValidatePin(c.ChildUserId, c.NewPin);
+}
+
+public sealed class UpgradeChildToPasswordCommandValidator : ICommandValidator<UpgradeChildToPasswordCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(UpgradeChildToPasswordCommand c)
+    {
+        var errors = new List<ApiResponseError>();
+        if (c.ChildUserId == Guid.Empty)
+            errors.Add(new ApiResponseError { Code = "child_id_required", Field = "id", Message = "معرّف الطفل مطلوب." });
+        // Strength check (zxcvbn) lives in the service against the child's own user-inputs.
+        if (string.IsNullOrEmpty(c.NewPassword) || c.NewPassword.Length < ValidationRules.MinPasswordLength || c.NewPassword.Length > ValidationRules.MaxPasswordLength)
+            errors.Add(new ApiResponseError { Code = "password_length", Field = "newPassword", Message = $"كلمة المرور يجب أن تتراوح بين {ValidationRules.MinPasswordLength} و{ValidationRules.MaxPasswordLength} حرفًا." });
+        return errors;
+    }
+}
+
+public sealed class ParentReAuthCommandValidator : ICommandValidator<ParentReAuthCommand>
+{
+    public IReadOnlyList<ApiResponseError> Validate(ParentReAuthCommand c)
+    {
+        var errors = new List<ApiResponseError>();
+        if (string.IsNullOrEmpty(c.Password))
+            errors.Add(new ApiResponseError { Code = "password_required", Field = "password", Message = "كلمة المرور مطلوبة." });
         return errors;
     }
 }

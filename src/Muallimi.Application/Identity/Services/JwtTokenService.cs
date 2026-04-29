@@ -179,6 +179,16 @@ public sealed class JwtTokenService : ITokenService
         {
             claims.Add(new Claim("avatar_bg_color", avatarBgColor));
         }
+        // Phase 9 credential-management: expose the credential tier on the
+        // token so the per-tier child settings page can render the right
+        // surface (no credential UI for profile_switch_only, read-only PIN
+        // notice for pin, change-password form for username_password)
+        // without an extra round-trip. Personal accounts have null
+        // LoginMethod and the claim is omitted.
+        if (!string.IsNullOrWhiteSpace(user.LoginMethod))
+        {
+            claims.Add(new Claim("login_method", user.LoginMethod));
+        }
         if (!string.IsNullOrWhiteSpace(user.Email))
         {
             claims.Add(new Claim(JwtRegisteredClaimNames.Email, user.Email));

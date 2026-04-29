@@ -151,5 +151,8 @@ public class ParentRevokesChildSessionTests
             h.Audit.Emitter,
             h.Notifications,
             NullLogger<UserManagementService>.Instance,
-            new WeakPinBlocklist());
+            new WeakPinBlocklist(),
+            new Muallimi.Api.Tests.Identity.AlwaysFreshManagerReAuth(),
+            new Muallimi.Api.Tests.Identity.InMemoryCredentialAuditWriter(),
+            new Muallimi.Application.Identity.Validators.ZxcvbnPasswordStrengthValidator());
 }

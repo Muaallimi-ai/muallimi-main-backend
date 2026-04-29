@@ -24,13 +24,7 @@ public class PasswordResetCycleTests
         const string newPw  = "NewPass-99!";
         var corr = Guid.NewGuid().ToString("D");
 
-        // Register + verify
-        var reg = await h.AuthService.RegisterParentAsync(new(
-            email, origPw, "مستخدم", null, "ar", true, "127.0.0.1", null, corr));
-        Assert.True(reg.Success);
-        var evToken = ExtractToken(h.Notifications.Dispatched
-            .First(n => n.Kind == "email_verification").Link);
-        await h.Verification.ConsumeAsync(evToken, corr);
+        await h.SeedVerifiedParentAsync(email, origPw);
 
         // Login works before reset
         var loginBefore = await h.AuthService.LoginAsync(new(
@@ -67,12 +61,7 @@ public class PasswordResetCycleTests
         const string email = "singleuse@example.com";
         var corr = Guid.NewGuid().ToString("D");
 
-        var reg = await h.AuthService.RegisterParentAsync(new(
-            email, "OldPass-1!", "مستخدم", null, "ar", true, "127.0.0.1", null, corr));
-        Assert.True(reg.Success);
-        var evToken = ExtractToken(h.Notifications.Dispatched
-            .First(n => n.Kind == "email_verification").Link);
-        await h.Verification.ConsumeAsync(evToken, corr);
+        await h.SeedVerifiedParentAsync(email, "OldPass-1!");
 
         await h.PasswordResetService.ForgotPasswordAsync(new ForgotPasswordCommand(email, "127.0.0.1", corr));
         var resetToken = ExtractToken(h.Notifications.Dispatched
@@ -95,12 +84,7 @@ public class PasswordResetCycleTests
         const string email = "sessionrevoke@example.com";
         var corr = Guid.NewGuid().ToString("D");
 
-        var reg = await h.AuthService.RegisterParentAsync(new(
-            email, "OldPass-1!", "مستخدم", null, "ar", true, "127.0.0.1", null, corr));
-        Assert.True(reg.Success);
-        var evToken = ExtractToken(h.Notifications.Dispatched
-            .First(n => n.Kind == "email_verification").Link);
-        await h.Verification.ConsumeAsync(evToken, corr);
+        await h.SeedVerifiedParentAsync(email, "OldPass-1!");
 
         // Login to create an active session
         var login = await h.AuthService.LoginAsync(new(

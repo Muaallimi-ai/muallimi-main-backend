@@ -8,9 +8,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Muallimi.Application.Audit;
 using Muallimi.Application.Identity.Commands;
+using Muallimi.Application.Identity.Credentials;
 using Muallimi.Application.Identity.Dtos;
 using Muallimi.Application.Identity.Notifications;
 using Muallimi.Application.Identity.Services;
+using Muallimi.Application.Identity.Validators;
 using Muallimi.Domain.Identity.Entities;
 using Muallimi.Domain.Identity.Enums;
 using Muallimi.Infrastructure.Persistence;
@@ -70,7 +72,21 @@ public sealed class PasswordResetService : IPasswordResetService
     private readonly AuditEventEmitter _audit;
     private readonly IIdentityNotificationSender _notifications;
     private readonly IPasswordResetLinkBuilder _linkBuilder;
+    private readonly IRateLimitService _rateLimits;
+    private readonly IPasswordStrengthValidator _passwordStrength;
+    private readonly ICredentialAuditWriter _credentialAudit;
+    private readonly IManagerReAuthService _reauth;
+    private readonly Muallimi.Api.Identity.Credentials.IChildCredentialNotifier _childNotifier;
     private readonly ILogger<PasswordResetService> _logger;
+
+    /// <summary>
+    /// Rate-limit policy for the change-password endpoint:
+    /// 5 attempts per 15 minutes, keyed per user. Closes the
+    /// brute-force window on the current-password verification step.
+    /// </summary>
+    private const int ChangePasswordMaxAttempts = 5;
+    private static readonly TimeSpan ChangePasswordWindow = TimeSpan.FromMinutes(15);
+    private const string ChangePasswordScope = "change-password-user";
 
     public PasswordResetService(
         MuallimiDbContext db,
@@ -80,6 +96,11 @@ public sealed class PasswordResetService : IPasswordResetService
         AuditEventEmitter audit,
         IIdentityNotificationSender notifications,
         IPasswordResetLinkBuilder linkBuilder,
+        IRateLimitService rateLimits,
+        IPasswordStrengthValidator passwordStrength,
+        ICredentialAuditWriter credentialAudit,
+        IManagerReAuthService reauth,
+        Muallimi.Api.Identity.Credentials.IChildCredentialNotifier childNotifier,
         ILogger<PasswordResetService> logger)
     {
         _db = db;
@@ -89,6 +110,11 @@ public sealed class PasswordResetService : IPasswordResetService
         _audit = audit;
         _notifications = notifications;
         _linkBuilder = linkBuilder;
+        _rateLimits = rateLimits;
+        _passwordStrength = passwordStrength;
+        _credentialAudit = credentialAudit;
+        _reauth = reauth;
+        _childNotifier = childNotifier;
         _logger = logger;
     }
 
@@ -189,6 +215,9 @@ public sealed class PasswordResetService : IPasswordResetService
         await _sessions.RevokeAllForUserAsync(user.Id, exceptSessionId: null, ct).ConfigureAwait(false);
         // Add-child redesign: parent password reset cascades to derived child sessions.
         await _sessionCascade.RevokeAllDerivedFromUserAsync(user.Id, ct).ConfigureAwait(false);
+        // Phase 9 Phase 3 — invalidate any active re-auth receipt; the password
+        // backing the receipt is no longer valid.
+        await _reauth.InvalidateAsync(user.Id, ct).ConfigureAwait(false);
 
         _audit.Emit(new AuditEvent
         {
@@ -230,28 +259,70 @@ public sealed class PasswordResetService : IPasswordResetService
     public async Task<SelfServiceResult> ChangePasswordAsync(
         ChangePasswordCommand cmd, Guid currentSessionId, CancellationToken ct = default)
     {
+        // 1) Rate-limit gate. 5 attempts / 15 min per user. Closes the
+        //    brute-force window on the current-password verification.
+        var rateKey = cmd.UserId.ToString("D");
+        var decision = await _rateLimits.IncrementAndCheckAsync(
+            ChangePasswordScope, rateKey, ChangePasswordMaxAttempts, ChangePasswordWindow, ct).ConfigureAwait(false);
+        if (!decision.Allowed)
+        {
+            return SelfServiceResult.Fail(429, "rate_limited", "محاولات كثيرة جدًا. حاول مرة أخرى لاحقًا.");
+        }
+
         var user = await _db.IdentityUsers.IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Id == cmd.UserId, ct).ConfigureAwait(false);
         if (user is null || string.IsNullOrEmpty(user.PasswordHash))
         {
+            await EmitChildRejectionIfApplicableAsync(user, cmd, ChildPasswordChangeRejectionReasons.WrongCurrent, ct).ConfigureAwait(false);
             return SelfServiceResult.Fail(401, "invalid_credentials", "بيانات الدخول غير صحيحة.");
+        }
+        if (user.Status == UserStatus.Locked)
+        {
+            await EmitChildRejectionIfApplicableAsync(user, cmd, ChildPasswordChangeRejectionReasons.Locked, ct).ConfigureAwait(false);
+            return SelfServiceResult.Fail(423, "account_locked", "الحساب مقفول مؤقتًا.");
         }
         if (!_passwords.Verify(cmd.CurrentPassword, user.PasswordHash))
         {
+            await EmitChildRejectionIfApplicableAsync(user, cmd, ChildPasswordChangeRejectionReasons.WrongCurrent, ct).ConfigureAwait(false);
             return SelfServiceResult.Fail(401, "invalid_credentials", "بيانات الدخول غير صحيحة.");
         }
 
+        // 2) Password strength gate (zxcvbn ≥ 3) — same threshold as parent registration.
+        //    Username + email are passed as user-input dictionary so derived passwords
+        //    (e.g. "username2026!") are scored as weak.
+        var userInputs = new List<string>();
+        if (!string.IsNullOrWhiteSpace(user.Username)) userInputs.Add(user.Username);
+        if (!string.IsNullOrWhiteSpace(user.Email)) userInputs.Add(user.Email);
+        if (!string.IsNullOrWhiteSpace(user.FullName)) userInputs.Add(user.FullName);
+        var strength = _passwordStrength.Evaluate(cmd.NewPassword, userInputs.ToArray());
+        if (!strength.IsAcceptable)
+        {
+            await EmitChildRejectionIfApplicableAsync(user, cmd, ChildPasswordChangeRejectionReasons.Weak, ct).ConfigureAwait(false);
+            return SelfServiceResult.Fail(422, "weak_password",
+                string.Equals(user.Locale, "en", StringComparison.OrdinalIgnoreCase) ? strength.FeedbackEn : strength.FeedbackAr);
+        }
+
+        // 3) Apply via canonical mutation (bumps PasswordHashVersion → optimistic concurrency).
         user.CompletePasswordReset(_passwords.Hash(cmd.NewPassword));
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
-        // Revoke all OTHER sessions (keep the calling session active)
+        // 4) Successful change → reset the rate-limit counter for this user so a
+        //    legitimate change doesn't leave the lockout primed.
+        await _rateLimits.ClearLockoutAsync($"{ChangePasswordScope}:{rateKey}", ct).ConfigureAwait(false);
+
+        // 5) Revoke all OTHER sessions (keep the calling session active).
         await _sessions.RevokeAllForUserAsync(
             user.Id,
             exceptSessionId: currentSessionId == Guid.Empty ? null : currentSessionId,
             ct).ConfigureAwait(false);
         // Add-child redesign: parent password change cascades to derived child sessions.
         await _sessionCascade.RevokeAllDerivedFromUserAsync(user.Id, ct).ConfigureAwait(false);
+        // Phase 9 Phase 3 — invalidate any active re-auth receipt so a stolen
+        // session cannot retain step-up authority across the password change.
+        await _reauth.InvalidateAsync(user.Id, ct).ConfigureAwait(false);
 
+        // 6) Identity audit (existing — kept for backwards compatibility with
+        //    AuthEventCategory queries) + new credential audit (DB-backed).
         _audit.Emit(new AuditEvent
         {
             EventCategory = AuthEventCategory.PasswordChange.ToString(),
@@ -263,6 +334,33 @@ public sealed class PasswordResetService : IPasswordResetService
             Outcome = "succeeded",
             CorrelationId = cmd.CorrelationId,
         });
+        if (IsChildSelfChange(user))
+        {
+            await _credentialAudit.WriteAsync(new CredentialAuditEvent
+            {
+                Kind = CredentialAuditEventKind.ChildPasswordChangedSelf,
+                TenantId = user.TenantId,
+                ActorId = user.Id,
+                ActorType = CredentialAuditActorTypes.User,
+                TargetUserId = user.Id,
+                CorrelationId = cmd.CorrelationId,
+                IpAddress = cmd.IpAddress,
+                UserAgent = cmd.UserAgent,
+            }, ct).ConfigureAwait(false);
+
+            // Phase 9 Phase 4: fan out to parent guardians (in-app + email,
+            // dashboard banner derived from in-app row). Per-day dedup
+            // is enforced inside the notifier, so multiple changes in a
+            // day collapse to one row + one email.
+            try
+            {
+                await _childNotifier.NotifyChildPasswordChangedAsync(user, cmd.CorrelationId, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fan out child_password_changed notification (user {UserId})", user.Id);
+            }
+        }
 
         try
         {
@@ -285,6 +383,35 @@ public sealed class PasswordResetService : IPasswordResetService
         }
 
         return SelfServiceResult.Ok("تم تغيير كلمة المرور.");
+    }
+
+    private static bool IsChildSelfChange(User user) =>
+        user.AccountType == AccountType.Managed
+        && string.Equals(user.LoginMethod, "username_password", StringComparison.Ordinal);
+
+    private async Task EmitChildRejectionIfApplicableAsync(
+        User? user, ChangePasswordCommand cmd, string reason, CancellationToken ct)
+    {
+        if (user is null || !IsChildSelfChange(user)) return;
+        try
+        {
+            await _credentialAudit.WriteAsync(new CredentialAuditEvent
+            {
+                Kind = CredentialAuditEventKind.ChildPasswordChangeRejected,
+                TenantId = user.TenantId,
+                ActorId = user.Id,
+                ActorType = CredentialAuditActorTypes.User,
+                TargetUserId = user.Id,
+                CorrelationId = cmd.CorrelationId,
+                IpAddress = cmd.IpAddress,
+                UserAgent = cmd.UserAgent,
+                Payload = new { reason },
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to emit child_password_change_rejected (user {UserId}, reason {Reason})", user.Id, reason);
+        }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────

@@ -63,6 +63,40 @@ public interface IIdentityNotificationSender
         CancellationToken ct = default);
 
     /// <summary>US5 — notify the managing parent of a child's unusual login.</summary>
+    /// <summary>
+    /// Phase 9 Phase 4 (Gap 11): sent to every guardian when a 13+
+    /// child changes their own password. Includes child name, grade,
+    /// username, and the change time. NEVER includes the new password.
+    /// </summary>
+    Task<NotificationDispatchReceipt> SendChildPasswordChangedByChildAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string childGrade,
+        string childUsername,
+        DateTime changeTimeUtc,
+        string correlationId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Phase 9 Phase 4: sent to the parent on the day a child reaches
+    /// age 8 — they are now eligible for a PIN-protected account.
+    /// </summary>
+    Task<NotificationDispatchReceipt> SendChildBirthdayPinEligibleAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string correlationId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Phase 9 Phase 4: sent to the parent on the day a child reaches
+    /// age 13 — they are now eligible for upgrade to a username + password.
+    /// </summary>
+    Task<NotificationDispatchReceipt> SendChildBirthdayPasswordEligibleAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string correlationId,
+        CancellationToken ct = default);
+
     Task<NotificationDispatchReceipt> SendChildUnusualLoginAsync(
         IdentityNotificationRecipient parentRecipient,
         string childName,
@@ -197,6 +231,63 @@ public sealed class IdentityNotificationSender : IIdentityNotificationSender
                 ["child_name"] = childName,
                 ["username"] = username,
                 ["temp_password"] = tempPassword,
+            },
+            ct: ct);
+
+    public Task<NotificationDispatchReceipt> SendChildPasswordChangedByChildAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string childGrade,
+        string childUsername,
+        DateTime changeTimeUtc,
+        string correlationId,
+        CancellationToken ct = default)
+        => SendAsync(
+            channel: "email",
+            templateKey: IdentityTemplateKeys.ChildPasswordChangedByChild,
+            recipient: parentRecipient,
+            correlationId: correlationId,
+            variables: new Dictionary<string, string>
+            {
+                ["full_name"] = parentRecipient.FullName,
+                ["child_name"] = childName,
+                ["child_grade"] = childGrade,
+                ["child_username"] = childUsername,
+                ["change_time"] = changeTimeUtc.ToString("yyyy-MM-dd HH:mm UTC"),
+            },
+            ct: ct);
+
+    public Task<NotificationDispatchReceipt> SendChildBirthdayPinEligibleAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string correlationId,
+        CancellationToken ct = default)
+        => SendAsync(
+            channel: "email",
+            templateKey: IdentityTemplateKeys.ChildBirthdayPinEligible,
+            recipient: parentRecipient,
+            correlationId: correlationId,
+            variables: new Dictionary<string, string>
+            {
+                ["full_name"] = parentRecipient.FullName,
+                ["child_name"] = childName,
+            },
+            ct: ct);
+
+    public Task<NotificationDispatchReceipt> SendChildBirthdayPasswordEligibleAsync(
+        IdentityNotificationRecipient parentRecipient,
+        string childName,
+        string correlationId,
+        CancellationToken ct = default)
+        => SendAsync(
+            channel: "email",
+            templateKey: IdentityTemplateKeys.ChildBirthdayPasswordEligible,
+            recipient: parentRecipient,
+            correlationId: correlationId,
+            variables: new Dictionary<string, string>
+            {
+                ["full_name"] = parentRecipient.FullName,
+                ["child_name"] = childName,
             },
             ct: ct);
 

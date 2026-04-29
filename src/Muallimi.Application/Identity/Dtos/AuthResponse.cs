@@ -53,6 +53,18 @@ public sealed class AuthResponse
 
     [JsonPropertyName("requiresPasswordReset")]
     public bool RequiresPasswordReset { get; init; }
+
+    /// <summary>
+    /// Phase 9 Phase 3 (Gap 11): set on the FIRST successful login
+    /// after a parent has reset this child's password or PIN. The
+    /// frontend renders a one-time informational toast ("your
+    /// password was reset by your parent on [date]") and the marker
+    /// is cleared server-side as part of the same login response —
+    /// subsequent logins return null. Only ever populated on
+    /// Managed (child) accounts.
+    /// </summary>
+    [JsonPropertyName("parentResetNoticeAt")]
+    public DateTime? ParentResetNoticeAt { get; init; }
 }
 
 /// <summary>

@@ -26,22 +26,22 @@ public class RegisterLoginCycleTests
     public async Task Full_Register_Verify_Login_Refresh_Logout_Happy_Path()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-
-        // 1. Register.
         var correlation = Guid.NewGuid().ToString("D");
-        var register = await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "cycle@example.com", "HorseBatteryStaple!77", "Parent", "Parent EN", "ar", true,
-            "127.0.0.1", "xunit-cycle", correlation));
-        Assert.True(register.Success);
 
+        // 1. Post-payment seed (RegisterParentAsync now writes only a
+        // PendingRegistration; the User row is created when payment
+        // confirms — modelled here by SeedUnverifiedParentAsync).
+        var (userId, _) = await h.SeedUnverifiedParentAsync("cycle@example.com", "HorseBatteryStaple!77");
         var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .FirstAsync(u => u.NormalizedEmail == "cycle@example.com");
+            .FirstAsync(u => u.Id == userId);
         Assert.Equal(UserStatus.PendingEmailVerification, user.Status);
 
-        // 2. Verify.
-        var record = h.Notifications.Dispatched[^1];
-        var plaintext = Uri.UnescapeDataString(record.Link.Split("token=", 2)[1]);
-        var verify = await h.Verification.ConsumeAsync(plaintext, correlation);
+        // 2. Issue + consume the verification token directly through the
+        // service (no notification spy in the loop — notifications are
+        // emitted asynchronously via IIdentityNotificationSender).
+        var issued = await h.Verification.IssueAsync(userId, correlation);
+        Assert.True(issued.Success);
+        var verify = await h.Verification.ConsumeAsync(issued.PlaintextToken!, correlation);
         Assert.True(verify.Success);
         await h.Db.Entry(user).ReloadAsync();
         Assert.Equal(UserStatus.Active, user.Status);
@@ -75,9 +75,9 @@ public class RegisterLoginCycleTests
             refresh.Payload.RefreshToken, "127.0.0.1", "xunit-cycle", correlation));
         Assert.False(postLogoutRefresh.Success);
 
-        // Audit timeline: register → email_verified → login_success → refresh → logout.
+        // Audit timeline (register_parent now emits as register_parent_pending
+        // by AuthService and is asserted in RegisterParentContractTests).
         var actions = h.Audit.Events.Select(e => e.Action).ToArray();
-        Assert.Contains("register_parent", actions);
         Assert.Contains("email_verified", actions);
         Assert.Contains("login_success", actions);
         Assert.Contains("refresh", actions);
@@ -88,12 +88,7 @@ public class RegisterLoginCycleTests
     public async Task Session_Revocation_Blocks_Subsequent_Use()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "rev@example.com", "HorseBatteryStaple!77", "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", Guid.NewGuid().ToString("D")));
-        var record = h.Notifications.Dispatched[^1];
-        var token = Uri.UnescapeDataString(record.Link.Split("token=", 2)[1]);
-        await h.Verification.ConsumeAsync(token, Guid.NewGuid().ToString("D"));
+        await h.SeedVerifiedParentAsync("rev@example.com");
 
         var login = await h.AuthService.LoginAsync(new LoginCommand(
             "rev@example.com", "HorseBatteryStaple!77",

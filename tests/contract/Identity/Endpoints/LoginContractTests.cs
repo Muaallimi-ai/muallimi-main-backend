@@ -93,10 +93,10 @@ public class LoginContractTests
     public async Task Pending_Verification_User_Cannot_Login()
     {
         using var h = await IdentityTestHarness.CreateAsync();
-        var correlation = Guid.NewGuid().ToString("D");
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            "pending@example.com", "HorseBatteryStaple!77", "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", correlation));
+        // Post-Paymob: RegisterParentAsync no longer creates a User row
+        // synchronously, so we seed a verified-=false user directly to
+        // exercise the "user exists but email_not_verified" branch.
+        await h.SeedUnverifiedParentAsync("pending@example.com", "HorseBatteryStaple!77");
 
         var outcome = await h.AuthService.LoginAsync(new LoginCommand(
             "pending@example.com", "HorseBatteryStaple!77",
@@ -133,16 +133,10 @@ public class LoginContractTests
 
     internal static async Task<User> RegisterAndVerifyAsync(IdentityTestHarness h, string email, string password)
     {
-        var correlation = Guid.NewGuid().ToString("D");
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            email, password, "Parent", null, "ar", true,
-            "127.0.0.1", "xunit", correlation));
-
-        // Consume the verification token captured by the notification spy.
-        var record = h.Notifications.Dispatched[^1];
-        var token = Uri.UnescapeDataString(record.Link.Split("token=", 2)[1]);
-        await h.Verification.ConsumeAsync(token, correlation);
-
+        // Post-Paymob, RegisterParentAsync only creates a PendingRegistration
+        // until payment completes. Tests that need a verified, logged-in-able
+        // parent seed directly via the harness helper.
+        await h.SeedVerifiedParentAsync(email, password);
         return await h.Db.IdentityUsers.IgnoreQueryFilters()
             .FirstAsync(u => u.NormalizedEmail == email);
     }

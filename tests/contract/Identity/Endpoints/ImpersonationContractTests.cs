@@ -153,25 +153,12 @@ public class ImpersonationContractTests
                 return attr?.Name ?? System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(p.Name);
             });
 
-    private static async Task RegisterAndVerifyAsync(IdentityTestHarness h, string email, string password)
-    {
-        var corr = Guid.NewGuid().ToString("D");
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            email, password, "تجربة", "Test", "ar", true,
-            "127.0.0.1", "xunit", corr));
-        var record = h.Notifications.Dispatched[^1];
-        var plaintext = Uri.UnescapeDataString(record.Link.Split("token=", 2)[1]);
-        await h.Verification.ConsumeAsync(plaintext, corr);
-    }
+    private static Task RegisterAndVerifyAsync(IdentityTestHarness h, string email, string password)
+        => h.SeedVerifiedParentAsync(email, password);
 
-    private static async Task<(Guid userId, Guid tenantId)> RegisterAndVerifyParentAsync(
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
         IdentityTestHarness h, string email)
-    {
-        await RegisterAndVerifyAsync(h, email, "HorseBatteryStaple!77");
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .FirstAsync(u => u.NormalizedEmail == email.Trim().ToLowerInvariant());
-        return (user.Id, user.TenantId);
-    }
+        => h.SeedVerifiedParentAsync(email);
 
     private static async Task<(Guid superAdminId, Guid platformTenantId)> SetupSuperAdminAsync(
         IdentityTestHarness h)

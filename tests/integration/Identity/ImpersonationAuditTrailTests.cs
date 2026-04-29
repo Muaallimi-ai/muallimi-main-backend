@@ -244,21 +244,9 @@ public class ImpersonationAuditTrailTests
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    private static async Task<(Guid userId, Guid tenantId)> RegisterAndVerifyParentAsync(
+    private static Task<(Guid UserId, Guid TenantId)> RegisterAndVerifyParentAsync(
         IdentityTestHarness h, string email)
-    {
-        var corr = Guid.NewGuid().ToString("D");
-        await h.AuthService.RegisterParentAsync(new RegisterParentCommand(
-            email, "HorseBatteryStaple!77", "تجربة", "Test", "ar", true,
-            "127.0.0.1", "xunit", corr));
-        // Extract the plaintext token from the notification spy link.
-        var record = h.Notifications.Dispatched[^1];
-        var plaintext = Uri.UnescapeDataString(record.Link.Split("token=", 2)[1]);
-        await h.Verification.ConsumeAsync(plaintext, corr);
-        var user = await h.Db.IdentityUsers.IgnoreQueryFilters()
-            .FirstAsync(u => u.NormalizedEmail == email.Trim().ToLowerInvariant());
-        return (user.Id, user.TenantId);
-    }
+        => h.SeedVerifiedParentAsync(email);
 
     private static async Task<(Guid superAdminId, Guid platformTenantId)> SetupSuperAdminAsync(
         IdentityTestHarness h)

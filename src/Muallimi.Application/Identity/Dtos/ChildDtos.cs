@@ -36,6 +36,9 @@ public sealed class ChildSummary
     [JsonPropertyName("avatarBgColor")]
     public string? AvatarBgColor { get; set; }
 
+    [JsonPropertyName("birthday")]
+    public DateOnly? Birthday { get; set; }
+
     [JsonPropertyName("loginMethod")]
     public string? LoginMethod { get; set; }
 
@@ -136,7 +139,7 @@ public sealed class ChildCredentialsOnce
     [JsonPropertyName("username")]
     public string Username { get; set; } = string.Empty;
 
-    /// <summary>"avatar_only" | "pin" | "username_password".</summary>
+    /// <summary>"profile_switch_only" | "pin" | "username_password".</summary>
     [JsonPropertyName("loginMethod")]
     public string LoginMethod { get; set; } = "username_password";
 
@@ -219,6 +222,16 @@ public sealed class CreateChildRequest
     /// </summary>
     [JsonPropertyName("parentalConsentAcknowledged")]
     public bool ParentalConsentAcknowledged { get; set; }
+
+    /// <summary>
+    /// Phase 9 follow-up — when the parent retries after seeing the
+    /// "duplicate child" dialog and chooses "Add anyway (twins)", the
+    /// frontend re-submits the same payload with this flag set to true.
+    /// Defaults to false so first-time creates run through the dedup
+    /// check normally.
+    /// </summary>
+    [JsonPropertyName("confirmDuplicate")]
+    public bool ConfirmDuplicate { get; set; }
 }
 
 /// <summary>Wire body for PATCH /api/auth/parent/children/{id}.</summary>
@@ -245,6 +258,20 @@ public sealed class UpdateChildRequest
     /// </summary>
     [JsonPropertyName("username")]
     public string? Username { get; set; }
+
+    // Profile-only fields surfaced by the EditChildDrawer.
+
+    [JsonPropertyName("avatarEmoji")]
+    public string? AvatarEmoji { get; set; }
+
+    [JsonPropertyName("avatarBgColor")]
+    public string? AvatarBgColor { get; set; }
+
+    [JsonPropertyName("curriculumType")]
+    public string? CurriculumType { get; set; }
+
+    [JsonPropertyName("schoolName")]
+    public string? SchoolName { get; set; }
 }
 
 /// <summary>Wire body for POST /api/auth/parent/children/{id}/unlock.</summary>

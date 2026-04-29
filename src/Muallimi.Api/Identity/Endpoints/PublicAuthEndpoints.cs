@@ -1,7 +1,5 @@
 using System;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -177,22 +175,28 @@ public static class PublicAuthEndpoints
     }
 
     /// <summary>
-    /// Add-child redesign security non-negotiable #1: anti-enumeration
-    /// lookup. Returns <c>{ method: "pin" | "password" }</c> for every
-    /// input — including invalid usernames — so the response cannot be
-    /// used to probe the user catalogue.
+    /// UX hint endpoint that tells the login form which credential field
+    /// shape to render. Returns <c>{ method: "pin" | "password" }</c>.
     ///
-    /// Disciplines:
-    /// • Real DB lookup runs even on miss (constant-time-ish: same code
-    ///   path executes; the dummy hash latency is dwarfed by the DB
-    ///   round-trip variance which we mask with small jitter).
-    /// • Invalid identifiers map deterministically to a method via
-    ///   SHA-256(identifier)[0] & 1 → so the same probe always sees the
-    ///   same answer (no leak from "different responses to the same
-    ///   input"); but different probes distribute ~50/50.
-    /// • Profile-switch-only children always answer "password" so the
-    ///   parent is steered to the profile-switch flow instead.
+    /// Default-safe rule: the form always defaults to <c>"password"</c>
+    /// EXCEPT when the identifier resolves to a real 8-12 child on the
+    /// PIN tier — only then do we return <c>"pin"</c>. Every other case
+    /// (real password account, real under-8 child, real 13+ child,
+    /// unknown email/phone/username, empty input) returns
+    /// <c>"password"</c>.
+    ///
+    /// Anti-enumeration disciplines:
+    /// • Same response shape on hit and miss; same envelope; same status.
+    /// • DB lookup runs even on empty input so the timing profile matches.
+    /// • 8-16ms jitter masks DB round-trip variance.
     /// • Rate limit 3/min/IP (parity with /login).
+    /// • The login endpoints themselves return identical
+    ///   <c>invalid_credentials</c> for "user doesn't exist" vs "wrong
+    ///   credential" — that's where the real anti-enum boundary lives.
+    ///   This endpoint is a UX hint, not a security boundary; usernames
+    ///   are auto-generated and never published, so a "pin" response
+    ///   only confirms tier for an attacker who already had the
+    ///   username, and the username already encodes the birth year.
     /// </summary>
     private static async Task<IResult> HandleLookupMethodAsync(
         LookupMethodRequest request,
@@ -225,31 +229,11 @@ public static class PublicAuthEndpoints
         // Small jitter to mask DB-roundtrip variance between hit/miss.
         await Task.Delay(System.Random.Shared.Next(8, 16), ct).ConfigureAwait(false);
 
-        string method;
-        if (user is null || string.IsNullOrEmpty(identifier))
-        {
-            // Deterministic-but-realistic fake. Same input → same answer.
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identifier));
-            method = (hash[0] & 1) == 0 ? "password" : "pin";
-        }
-        else if (user.AccountType == AccountType.Personal)
-        {
-            // Parents / school admins / operators always use password.
-            method = "password";
-        }
-        else
-        {
-            method = user.LoginMethod switch
-            {
-                "pin" => "pin",
-                "username_password" => "password",
-                // profile_switch_only or anything else: keep the answer
-                // shaped like a password account so the under-8 child's
-                // existence is not revealed. Login attempts will fail
-                // and the parent learns to use profile-switch.
-                _ => "password",
-            };
-        }
+        // Default to "password". Only flip to "pin" when the identifier
+        // resolves to a real Managed account whose LoginMethod is "pin".
+        var method = (user is { AccountType: AccountType.Managed, LoginMethod: "pin" })
+            ? "pin"
+            : "password";
 
         return AuthEndpointHelpers.OkEnvelope(new { method }, "ok", correlationId);
     }

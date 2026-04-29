@@ -133,8 +133,7 @@ public static class AuthenticatedEndpoints
             return AuthEndpointHelpers.FailEnvelope(422, "pin_too_weak", "رمز PIN ضعيف. اختر رمزًا أصعب.", correlationId);
         }
 
-        child.PinHash = passwords.Hash(cmd.NewPin);
-        child.UpdatedAt = DateTime.UtcNow;
+        child.SetPin(passwords.Hash(cmd.NewPin));
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         return AuthEndpointHelpers.OkEnvelope(new { changed = true }, "تم تغيير رمز PIN.", correlationId);

@@ -38,14 +38,43 @@ public class User : ITenantScoped
     public bool RequiresPasswordReset { get; set; }
 
     /// <summary>
+    /// Optimistic-concurrency token for credential mutations. Increments
+    /// on every <see cref="SetPassword"/> and <see cref="SetPin"/> call.
+    /// Marked <c>IsConcurrencyToken</c> in the EF configuration so two
+    /// simultaneous credential changes (e.g. child self-change racing
+    /// parent reset) cannot silently overwrite each other — the loser
+    /// gets a <see cref="DbUpdateConcurrencyException"/> which the API
+    /// layer translates to HTTP 409.
+    /// </summary>
+    public int PasswordHashVersion { get; set; }
+
+    /// <summary>
     /// Credential method for Managed (child) accounts.
-    /// "username_password" (12+), "pin" (8–12), "avatar_only" (&lt;8).
+    /// "username_password" (12+), "pin" (8–12), "profile_switch_only" (&lt;8).
     /// Null for Personal accounts.
     /// </summary>
     public string? LoginMethod { get; set; }
 
     /// <summary>Hashed 4-digit PIN. Set only when LoginMethod = "pin".</summary>
     public string? PinHash { get; set; }
+
+    /// <summary>
+    /// Set by <see cref="ChildAgeTransitionJob"/> on the day the child
+    /// reaches a credential-tier threshold (8 → eligible for PIN, 13 →
+    /// eligible for password). Idempotency flag — once set, the daily
+    /// job never re-notifies the parent for the same child. Null until
+    /// the first transition fires.
+    /// </summary>
+    public DateTime? AgeTransitionNotifiedAt { get; set; }
+
+    /// <summary>
+    /// Set when the parent resets this child's password or PIN — the
+    /// child sees a one-time informational notice on their next
+    /// successful login ("your password was reset by your parent on
+    /// [date]") and the field is cleared after the notice is shown.
+    /// Never set on parent-self-reset of an own credential.
+    /// </summary>
+    public DateTime? PendingParentResetNoticeAt { get; set; }
 
     public bool TwoFactorEnabled { get; set; }
     public string Locale { get; set; } = "ar";
@@ -178,21 +207,134 @@ public class User : ITenantScoped
         UpdatedAt = DateTime.UtcNow;
     }
 
-    public void CompletePasswordReset(string newHash)
+    /// <summary>
+    /// Canonical password mutation. Sets the hash, stamps
+    /// <see cref="PasswordChangedAt"/>, bumps
+    /// <see cref="PasswordHashVersion"/> for optimistic concurrency, and
+    /// clears <see cref="RequiresPasswordReset"/>. Does NOT touch
+    /// lockout state or status — callers compose lockout/status changes
+    /// explicitly when relevant (e.g. <see cref="CompletePasswordReset"/>
+    /// is the reset-flow composition; child self-change keeps the
+    /// current session and only revokes other sessions externally).
+    /// </summary>
+    public void SetPassword(string newHash)
     {
         if (Status == UserStatus.Archived)
         {
-            throw new InvalidOperationException("Archived users cannot reset password.");
+            throw new InvalidOperationException("Archived users cannot change password.");
         }
         PasswordHash = newHash;
         PasswordChangedAt = DateTime.UtcNow;
         RequiresPasswordReset = false;
+        PasswordHashVersion += 1;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Canonical PIN mutation. Sets the PIN hash and bumps
+    /// <see cref="PasswordHashVersion"/> — the same concurrency token
+    /// covers both credential types, so a parent reset of a PIN cannot
+    /// race a parent reset of a password (or vice versa) on the same
+    /// account. Does NOT touch lockout state — PIN unlock is an
+    /// explicit parent action, see <see cref="UnlockPin"/>.
+    /// </summary>
+    public void SetPin(string newPinHash)
+    {
+        if (Status == UserStatus.Archived)
+        {
+            throw new InvalidOperationException("Archived users cannot change PIN.");
+        }
+        PinHash = newPinHash;
+        PasswordHashVersion += 1;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Reset-flow composition: applies <see cref="SetPassword"/>, clears
+    /// failed-login state, and transitions Locked / PasswordResetRequired
+    /// back to Active. Used by parent/admin reset endpoints and the
+    /// self-service email reset link.
+    /// </summary>
+    public void CompletePasswordReset(string newHash)
+    {
+        SetPassword(newHash);
         FailedLoginAttempts = 0;
         LockoutEnd = null;
         if (Status == UserStatus.Locked || Status == UserStatus.PasswordResetRequired)
         {
             Status = UserStatus.Active;
         }
+    }
+
+    /// <summary>
+    /// Stamp the post-reset notice marker so this child sees a
+    /// one-time informational message on next login. Called by parent
+    /// reset flows (password / PIN). No-op for parent-self-reset.
+    /// </summary>
+    public void MarkPendingParentResetNotice()
+    {
+        PendingParentResetNoticeAt = DateTime.UtcNow;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Clear the post-reset notice marker after the child has seen
+    /// the one-time notice on a successful login.
+    /// </summary>
+    public void AcknowledgeParentResetNotice()
+    {
+        if (PendingParentResetNoticeAt is null) return;
+        PendingParentResetNoticeAt = null;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Promote a profile-switch-only (under-8) child to PIN tier on
+    /// their 8th birthday. Sets the credential string and the PIN hash
+    /// in one atomic mutation that bumps <see cref="PasswordHashVersion"/>.
+    /// </summary>
+    public void AddPinForUnderEight(string newPinHash)
+    {
+        if (LoginMethod != Enums.LoginMethods.ProfileSwitchOnly)
+        {
+            throw new InvalidOperationException($"AddPinForUnderEight requires LoginMethod={Enums.LoginMethods.ProfileSwitchOnly} (current: {LoginMethod}).");
+        }
+        LoginMethod = Enums.LoginMethods.Pin;
+        SetPin(newPinHash);
+    }
+
+    /// <summary>
+    /// Promote a PIN-tier (8–12) child to username + password tier on
+    /// their 13th birthday. Clears the PinHash, sets the password hash,
+    /// and bumps <see cref="PasswordHashVersion"/> in one mutation so
+    /// the tier change is atomic with the credential rotation.
+    /// </summary>
+    public void UpgradePinToPassword(string newPasswordHash)
+    {
+        if (LoginMethod != Enums.LoginMethods.Pin)
+        {
+            throw new InvalidOperationException($"UpgradePinToPassword requires LoginMethod={Enums.LoginMethods.Pin} (current: {LoginMethod}).");
+        }
+        LoginMethod = Enums.LoginMethods.UsernamePassword;
+        PinHash = null;
+        SetPassword(newPasswordHash);
+    }
+
+    /// <summary>
+    /// Explicit parent-driven PIN unlock. PIN lockouts are permanent
+    /// (no time-based auto-recovery) — this is the only path back to
+    /// <see cref="UserStatus.Active"/> for a child that hit the PIN
+    /// failure threshold.
+    /// </summary>
+    public void UnlockPin()
+    {
+        if (Status != UserStatus.Locked)
+        {
+            throw new InvalidOperationException($"Only Locked users can be unlocked (current: {Status}).");
+        }
+        FailedLoginAttempts = 0;
+        LockoutEnd = null;
+        Status = UserStatus.Active;
         UpdatedAt = DateTime.UtcNow;
     }
 
