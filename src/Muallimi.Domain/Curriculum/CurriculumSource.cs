@@ -78,17 +78,56 @@ public class CurriculumSource
         Status = SourceStatus.Ingesting;
     }
 
-    public void MarkIndexed()
+    public void MarkExtracted()
     {
         if (Status != SourceStatus.Ingesting)
-            throw new InvalidOperationException($"Cannot mark indexed from status '{Status}'. Must be '{SourceStatus.Ingesting}'.");
+            throw new InvalidOperationException($"Cannot mark extracted from status '{Status}'. Must be '{SourceStatus.Ingesting}'.");
+        Status = SourceStatus.Extracted;
+    }
+
+    public void MarkInReview()
+    {
+        if (Status != SourceStatus.Extracted)
+            throw new InvalidOperationException($"Cannot mark in-review from status '{Status}'. Must be '{SourceStatus.Extracted}'.");
+        Status = SourceStatus.InReview;
+    }
+
+    public void MarkApproved()
+    {
+        if (Status != SourceStatus.InReview && Status != SourceStatus.Extracted)
+            throw new InvalidOperationException($"Cannot mark approved from status '{Status}'. Must be '{SourceStatus.InReview}' or '{SourceStatus.Extracted}'.");
+        Status = SourceStatus.Approved;
+    }
+
+    /// <summary>
+    /// Resets the source back to <see cref="SourceStatus.Received"/> so the
+    /// admin can re-trigger extraction. Allowed from any post-upload state
+    /// except Indexed/Replaced (those are downstream of the pipeline being
+    /// completed end-to-end and should not be casually reset).
+    /// </summary>
+    public void ResetForReextract()
+    {
+        if (Status == SourceStatus.Indexed || Status == SourceStatus.Replaced)
+            throw new InvalidOperationException($"Cannot reset for re-extract from status '{Status}'.");
+        Status = SourceStatus.Received;
+    }
+
+    public void MarkIndexed()
+    {
+        // Reached from Ingesting (legacy auto-pipeline), Extracted (no-review
+        // staged flow), Approved (the future chunk+embed pass), or InReview
+        // (operator skip-to-publish path).
+        if (Status != SourceStatus.Ingesting && Status != SourceStatus.Extracted
+            && Status != SourceStatus.Approved && Status != SourceStatus.InReview)
+            throw new InvalidOperationException($"Cannot mark indexed from status '{Status}'.");
         Status = SourceStatus.Indexed;
     }
 
     public void MarkFailed(string reason)
     {
-        if (Status != SourceStatus.Ingesting)
-            throw new InvalidOperationException($"Cannot mark failed from status '{Status}'. Must be '{SourceStatus.Ingesting}'.");
+        if (Status != SourceStatus.Ingesting && Status != SourceStatus.Extracted
+            && Status != SourceStatus.InReview)
+            throw new InvalidOperationException($"Cannot mark failed from status '{Status}'.");
         Status = SourceStatus.Failed;
     }
 

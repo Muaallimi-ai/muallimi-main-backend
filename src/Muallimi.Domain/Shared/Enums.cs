@@ -39,7 +39,13 @@ public enum SourceStatus
     Ingesting,
     Indexed,
     Failed,
-    Replaced
+    Replaced,
+    // Appended at the end to preserve the numeric ordinals of the existing
+    // values — inserting in the middle would shift Indexed/Failed/Replaced
+    // and silently corrupt every existing row stored as an int.
+    Extracted,
+    InReview,
+    Approved,
 }
 
 public enum LessonStatus

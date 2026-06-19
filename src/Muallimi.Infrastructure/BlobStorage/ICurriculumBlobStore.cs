@@ -23,5 +23,13 @@ public interface ICurriculumBlobStore
     /// </summary>
     Task DeleteAsync(string objectKey, CancellationToken ct = default);
 
+    /// <summary>
+    /// Streams the object's bytes for inline preview / re-download.
+    /// Caller is responsible for disposing the returned stream.
+    /// </summary>
+    Task<BlobDownloadResult> DownloadAsync(string objectKey, CancellationToken ct = default);
+
     string BucketName { get; }
 }
+
+public sealed record BlobDownloadResult(Stream Content, string ContentType, long? Length);

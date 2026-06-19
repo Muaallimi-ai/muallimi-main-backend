@@ -652,12 +652,17 @@ app.MapCurriculumNodeChunks();
 app.MapCurriculumSourcePipeline();
 app.MapCurriculumSourceDelete();
 
+// Upload a new curriculum source. MVP behaviour: this endpoint ONLY stores
+// the file + metadata. It deliberately does not enqueue an ingestion job —
+// the admin must explicitly trigger extraction from /admin/curriculum/sources/{id}/extract.
+// This separation lets us measure each stage in isolation (upload accuracy,
+// extraction quality, review throughput) before stitching them into an
+// automatic pipeline in a later phase.
 app.MapPost("/admin/curriculum/upload", async (
     HttpContext httpContext,
     MuallimiDbContext db,
     AuditEventEmitter audit,
-    ICurriculumBlobStore blobStore,
-    IIngestionJobPublisher publisher) =>
+    ICurriculumBlobStore blobStore) =>
 {
     if (!httpContext.Request.HasFormContentType)
         return Results.BadRequest(new { error = "Multipart form data required." });
@@ -730,27 +735,13 @@ app.MapPost("/admin/curriculum/upload", async (
         ctEnum, gradeEnum, subjectEnum, academicYear, langEnum, format, storageKey, contentHash, actor,
         originalFileName: file.FileName);
 
-    var job = Muallimi.Domain.Content.IngestionJob.Create(source.SourceId, correlationId);
-
     db.CurriculumSources.Add(source);
-    db.IngestionJobs.Add(job);
     await db.SaveChangesAsync();
 
-    // Publish to the ingestion worker. If this throws, the DB rows remain and
-    // the job can be replayed via /admin/curriculum/jobs/republish.
-    await publisher.PublishAsync(new IngestionMessage(
-        JobId: job.JobId,
-        SourceId: source.SourceId,
-        StorageKey: storageKey,
-        CurriculumType: ctEnum.ToString(),
-        Grade: gradeEnum.ToString(),
-        Subject: subjectEnum.ToString(),
-        TutorLanguage: langEnum.ToString(),
-        AcademicYear: academicYear,
-        FileFormat: format.ToString(),
-        ContentHash: contentHash,
-        CorrelationId: correlationId),
-        httpContext.RequestAborted);
+    // No IngestionJob and no RabbitMQ publish here. The source is parked in
+    // SourceStatus.Received (the frontend renders this as
+    // "Ready for extracting") until the admin explicitly calls
+    // POST /admin/curriculum/sources/{sourceId}/extract.
 
     audit.Emit(new AuditEvent
     {
@@ -764,17 +755,343 @@ app.MapPost("/admin/curriculum/upload", async (
         CorrelationId = correlationId
     });
 
-    return Results.Created($"/admin/curriculum/jobs/{job.JobId}", new
+    return Results.Created($"/admin/curriculum/sources/{source.SourceId}", new
     {
         source_id = source.SourceId,
-        job_id = job.JobId,
-        status = job.Status.ToString(),
+        status = source.Status.ToString(),
         correlation_id = correlationId
     });
 })
 .WithName("UploadCurriculum")
 .WithTags("Curriculum")
 .DisableAntiforgery();
+
+// Explicit per-source extraction trigger for the MVP stage-separated flow.
+// The admin uploads via POST /admin/curriculum/upload (no auto-pipeline);
+// then, when ready, hits this endpoint to enqueue a Claude-driven structure
+// extraction job. The worker reads ExtractOnly=true on the message and
+// stops after writing the structure tree + lessons (no chunking, no
+// embedding) so we can measure extraction accuracy independently before
+// the rest of the pipeline runs.
+app.MapPost("/admin/curriculum/sources/{sourceId:guid}/extract", async (
+    Guid sourceId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit,
+    IIngestionJobPublisher publisher) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    // Only sources still parked in Received (uploaded but not yet extracted)
+    // are eligible. Anything further along the pipeline must be deleted +
+    // re-uploaded to re-extract.
+    if (source.Status != Muallimi.Domain.Shared.SourceStatus.Received)
+    {
+        return Results.Conflict(new
+        {
+            error = $"Cannot start extraction for a source in status '{source.Status}'. " +
+                    "Only sources in 'Received' (Ready for extracting) can be extracted.",
+            current_status = source.Status.ToString()
+        });
+    }
+
+    var job = Muallimi.Domain.Content.IngestionJob.Create(source.SourceId, correlationId);
+    db.IngestionJobs.Add(job);
+
+    // Transition the source: Received → Ingesting. The worker will move it
+    // on to Extracted via the /internal/ingestion/results callback when the
+    // structure extraction completes.
+    source.MarkIngesting();
+
+    await db.SaveChangesAsync(httpContext.RequestAborted);
+
+    await publisher.PublishAsync(new IngestionMessage(
+        JobId: job.JobId,
+        SourceId: source.SourceId,
+        StorageKey: source.StorageKey,
+        CurriculumType: source.CurriculumType.ToString(),
+        Grade: source.Grade.ToString(),
+        Subject: source.Subject.ToString(),
+        TutorLanguage: source.TutorLanguage.ToString(),
+        AcademicYear: source.AcademicYear,
+        FileFormat: source.FileFormat.ToString(),
+        ContentHash: source.ContentHash,
+        CorrelationId: correlationId,
+        ExtractOnly: true),
+        httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "extract-triggered",
+        TargetType = "CurriculumSource",
+        TargetId = source.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Accepted($"/admin/curriculum/sources/{source.SourceId}", new
+    {
+        source_id = source.SourceId,
+        job_id = job.JobId,
+        status = source.Status.ToString(),
+        correlation_id = correlationId
+    });
+})
+.WithName("StartCurriculumExtraction")
+.WithTags("Curriculum");
+
+// ── MVP stage-separated flow: review transitions ────────────────────────
+//
+// Send-for-review: Extracted → InReview. Called when the admin finishes
+// auditing the extracted structure on the workbench (surface 3) and is
+// ready to hand it off to the structured review pass (surface 4).
+app.MapPost("/admin/curriculum/sources/{sourceId:guid}/send-for-review", async (
+    Guid sourceId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    try { source.MarkInReview(); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message, current_status = source.Status.ToString() }); }
+
+    await db.SaveChangesAsync(httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "send-for-review",
+        TargetType = "CurriculumSource",
+        TargetId = source.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { source_id = source.SourceId, status = source.Status.ToString(), correlation_id = correlationId });
+})
+.WithName("SendCurriculumForReview")
+.WithTags("Curriculum");
+
+// Approve: InReview / Extracted → Approved. Signing off on the structure
+// for downstream chunk + embed (future trigger).
+app.MapPost("/admin/curriculum/sources/{sourceId:guid}/approve", async (
+    Guid sourceId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    try { source.MarkApproved(); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message, current_status = source.Status.ToString() }); }
+
+    await db.SaveChangesAsync(httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "approve-structure",
+        TargetType = "CurriculumSource",
+        TargetId = source.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { source_id = source.SourceId, status = source.Status.ToString(), correlation_id = correlationId });
+})
+.WithName("ApproveCurriculumStructure")
+.WithTags("Curriculum");
+
+// Request re-extract: any non-terminal post-upload state → Received. The
+// admin can then trigger /extract again. We also delete the existing
+// CurriculumStructure rows so the next extraction can write fresh ones.
+app.MapPost("/admin/curriculum/sources/{sourceId:guid}/request-reextract", async (
+    Guid sourceId,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    try { source.ResetForReextract(); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message, current_status = source.Status.ToString() }); }
+
+    // Clear any existing structure + lessons so the re-extraction starts clean.
+    var structureIds = await db.CurriculumStructures
+        .Where(s => s.SourceId == sourceId)
+        .Select(s => s.StructureId)
+        .ToListAsync(httpContext.RequestAborted);
+    if (structureIds.Count > 0)
+    {
+        var lessonIds = await db.Lessons
+            .Where(l => structureIds.Contains(l.StructureId))
+            .Select(l => l.LessonId)
+            .ToListAsync(httpContext.RequestAborted);
+        if (lessonIds.Count > 0)
+            await db.Lessons.Where(l => lessonIds.Contains(l.LessonId)).ExecuteDeleteAsync(httpContext.RequestAborted);
+        await db.CurriculumStructures.Where(s => structureIds.Contains(s.StructureId)).ExecuteDeleteAsync(httpContext.RequestAborted);
+    }
+
+    await db.IngestionJobs.Where(j => j.SourceId == sourceId).ExecuteDeleteAsync(httpContext.RequestAborted);
+    await db.SaveChangesAsync(httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "request-reextract",
+        TargetType = "CurriculumSource",
+        TargetId = source.SourceId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { source_id = source.SourceId, status = source.Status.ToString(), correlation_id = correlationId });
+})
+.WithName("RequestCurriculumReextract")
+.WithTags("Curriculum");
+
+// Replace the extracted structure JSON for a source. The Review surface
+// posts the edited tree here (the whole tree, not a delta) so the admin
+// can rename, delete, and reorder nodes without taking on the complexity
+// of incremental patches in the MVP. Allowed in Extracted / InReview.
+app.MapMethods("/admin/curriculum/sources/{sourceId:guid}/structure", new[] { "PATCH" }, async (
+    Guid sourceId,
+    StructureUpdatePayload payload,
+    HttpContext httpContext,
+    MuallimiDbContext db,
+    AuditEventEmitter audit) =>
+{
+    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
+    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
+
+    if (string.IsNullOrWhiteSpace(payload.Nodes))
+        return Results.BadRequest(new { error = "nodes JSON is required." });
+
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    if (source.Status != Muallimi.Domain.Shared.SourceStatus.Extracted
+        && source.Status != Muallimi.Domain.Shared.SourceStatus.InReview)
+    {
+        return Results.Conflict(new
+        {
+            error = $"Structure can only be edited in Extracted or InReview. Current: {source.Status}.",
+            current_status = source.Status.ToString()
+        });
+    }
+
+    var structure = await db.CurriculumStructures
+        .Where(s => s.SourceId == sourceId)
+        .OrderByDescending(s => s.ExtractedAt)
+        .FirstOrDefaultAsync(httpContext.RequestAborted);
+    if (structure is null)
+        return Results.NotFound(new { error = "No structure to edit." });
+
+    structure.UpdateNodes(payload.Nodes);
+    await db.SaveChangesAsync(httpContext.RequestAborted);
+
+    audit.Emit(new AuditEvent
+    {
+        EventCategory = "curriculum",
+        Action = "edit-structure",
+        TargetType = "CurriculumStructure",
+        TargetId = structure.StructureId.ToString(),
+        ActorId = actor,
+        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
+        Outcome = "succeeded",
+        CorrelationId = correlationId
+    });
+
+    return Results.Ok(new { source_id = sourceId, structure_id = structure.StructureId, correlation_id = correlationId });
+})
+.WithName("UpdateCurriculumStructure")
+.WithTags("Curriculum");
+
+// Inline PDF preview: streams the stored file from MinIO so the workbench
+// can render it side-by-side with the extracted tree. Inline disposition
+// so the browser opens it in-iframe instead of forcing a download.
+app.MapGet("/admin/curriculum/sources/{sourceId:guid}/download", async (
+    Guid sourceId,
+    MuallimiDbContext db,
+    ICurriculumBlobStore blobStore,
+    HttpContext httpContext) =>
+{
+    var source = await db.CurriculumSources.FindAsync(new object[] { sourceId }, httpContext.RequestAborted);
+    if (source is null)
+        return Results.NotFound(new { error = "Source not found." });
+
+    BlobDownloadResult download;
+    try
+    {
+        download = await blobStore.DownloadAsync(source.StorageKey, httpContext.RequestAborted);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Failed to load source file.",
+            detail: ex.Message,
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    var fileName = !string.IsNullOrWhiteSpace(source.OriginalFileName)
+        ? source.OriginalFileName
+        : Path.GetFileName(source.StorageKey);
+
+    // Inline disposition so the workbench iframe renders the PDF instead of
+    // triggering a download. Filename is still set for the "Open in new tab"
+    // path so the browser shows a sensible tab title + save-as default.
+    var safeName = System.Uri.EscapeDataString(fileName);
+    httpContext.Response.Headers.ContentDisposition =
+        $"inline; filename=\"{fileName}\"; filename*=UTF-8''{safeName}";
+    httpContext.Response.Headers.CacheControl = "private, max-age=300";
+
+    // The global security middleware sets X-Frame-Options: DENY and a
+    // restrictive CSP that prevent the curriculum-admin workbench iframe
+    // (frontend on :3000) from rendering this PDF (backend on :5063).
+    // Override both for this single read-only download endpoint so the
+    // PDF preview pane works in dev. Production tightens this via an env-
+    // driven allow-list of frontend origins.
+    httpContext.Response.Headers.Remove("X-Frame-Options");
+    var allowedFrontend = httpContext.RequestServices
+        .GetService<IConfiguration>()?["FrontendOrigin"] ?? "http://localhost:3000";
+    httpContext.Response.Headers["Content-Security-Policy"] =
+        $"default-src 'self'; frame-ancestors 'self' {allowedFrontend}";
+
+    return Results.Stream(download.Content, contentType: download.ContentType, enableRangeProcessing: true);
+})
+.WithName("DownloadCurriculumSource")
+.WithTags("Curriculum");
 
 // Re-publish queued ingestion jobs that never made it onto the bus
 // (e.g. uploads that landed before the publisher was wired, or after a
@@ -827,6 +1144,15 @@ app.MapGet("/admin/curriculum/jobs/{jobId:guid}", async (Guid jobId, MuallimiDbC
     if (job is null)
         return Results.NotFound(new { error = "Job not found." });
 
+    // Count concurrent in-flight jobs (any tenant) that started before this
+    // one. The frontend uses this to show "another extraction is running,
+    // yours will start next" while the worker is busy. Excludes self even
+    // if it's processing — the value answers "how many AHEAD of me", not
+    // "how many in the system".
+    var processingAhead = await db.IngestionJobs
+        .CountAsync(j => j.JobId != jobId
+            && j.Status == Muallimi.Domain.Shared.IngestionJobStatus.Processing);
+
     return Results.Ok(new
     {
         job_id = job.JobId,
@@ -836,7 +1162,8 @@ app.MapGet("/admin/curriculum/jobs/{jobId:guid}", async (Guid jobId, MuallimiDbC
         started_at = job.StartedAt,
         completed_at = job.CompletedAt,
         error_reason = job.ErrorReason,
-        correlation_id = job.CorrelationId
+        correlation_id = job.CorrelationId,
+        processing_jobs_ahead = processingAhead
     });
 })
 .WithName("GetIngestionJobStatus")
@@ -923,14 +1250,22 @@ app.MapPut("/internal/ingestion/jobs/{jobId:guid}/status", async (
     else if (update.Status == "failed")
         job.MarkFailed(update.ErrorReason ?? "Unknown error");
 
-    // Also update the source status
+    // Also update the source status. For the MVP extract-only flow the worker
+    // sets extract_only=true on the completion call so we stop at Extracted
+    // instead of advancing through to Indexed. Legacy (full pipeline) callers
+    // get the original behaviour because the default is false.
     var source = await db.CurriculumSources.FindAsync(job.SourceId);
     if (source is not null)
     {
         if (update.Status == "processing" && source.Status == Muallimi.Domain.Shared.SourceStatus.Received)
             source.MarkIngesting();
         else if (update.Status == "completed")
-            source.MarkIndexed();
+        {
+            if (update.ExtractOnly)
+                source.MarkExtracted();
+            else
+                source.MarkIndexed();
+        }
         else if (update.Status == "failed")
             source.MarkFailed(update.ErrorReason ?? "Unknown error");
     }
@@ -955,7 +1290,10 @@ app.MapPost("/internal/ingestion/results", async (
     if (source is null)
         return Results.NotFound(new { error = "Source not found." });
 
-    // Create lessons and chunks
+    // Create lessons (and chunks, when present). In the MVP extract-only path
+    // payload.Lessons carries skeletons with no chunks — the chunks loop just
+    // skips quietly and lessons land in `Ingested` state ready for the future
+    // chunk + embed trigger.
     foreach (var lessonData in payload.Lessons)
     {
         var lesson = Muallimi.Domain.Curriculum.Lesson.Create(
@@ -967,7 +1305,7 @@ app.MapPost("/internal/ingestion/results", async (
             lessonData.Path);
 
         lesson.SetContentHash(lessonData.ContentHash);
-        lesson.MarkIngested("Initial ingestion");
+        lesson.MarkIngested(payload.ExtractOnly ? "Structure extracted" : "Initial ingestion");
         db.Lessons.Add(lesson);
 
         foreach (var chunkData in lessonData.Chunks)
@@ -2099,141 +2437,13 @@ app.MapMethods("/admin/review/{assetId:guid}/request-edit", new[] { "PATCH" }, a
 .WithName("ExpertRequestEdit")
 .WithTags("Review");
 
-// ── US5: Update and Invalidation Endpoints ──
-
-// T105: POST /admin/curriculum/{sourceId}/update — upload updated source; delta re-processes only changed lessons
-app.MapPost("/admin/curriculum/{sourceId:guid}/update", async (
-    Guid sourceId,
-    HttpContext httpContext,
-    MuallimiDbContext db,
-    AssetInvalidationHandler invalidationHandler,
-    AuditEventEmitter audit) =>
-{
-    if (!httpContext.Request.HasFormContentType)
-        return Results.BadRequest(new { error = "Multipart form data required." });
-
-    var correlationId = httpContext.Items["CorrelationId"]?.ToString() ?? Guid.NewGuid().ToString();
-    var actor = httpContext.Items["ActorRole"]?.ToString() ?? "anonymous";
-
-    // Find the existing source
-    var existingSource = await db.CurriculumSources.FindAsync(sourceId);
-    if (existingSource is null)
-        return Results.NotFound(new { error = "Source not found." });
-
-    if (existingSource.Status != Muallimi.Domain.Shared.SourceStatus.Indexed)
-        return Results.BadRequest(new { error = $"Cannot update source in status '{existingSource.Status}'. Must be 'Indexed'." });
-
-    var form = await httpContext.Request.ReadFormAsync();
-    var file = form.Files.GetFile("file");
-    if (file is null || file.Length == 0)
-        return Results.BadRequest(new { error = "An updated curriculum file is required." });
-
-    // Determine file format
-    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
-    Muallimi.Domain.Shared.FileFormat format = ext switch
-    {
-        ".pdf" => Muallimi.Domain.Shared.FileFormat.Pdf,
-        ".docx" => Muallimi.Domain.Shared.FileFormat.Docx,
-        ".html" or ".htm" => Muallimi.Domain.Shared.FileFormat.Html,
-        _ => throw new InvalidOperationException($"Unsupported file format '{ext}'. Accepted: .pdf, .docx, .html")
-    };
-
-    // Compute content hash for the new file
-    using var stream = file.OpenReadStream();
-    using var sha = System.Security.Cryptography.SHA256.Create();
-    var hashBytes = await sha.ComputeHashAsync(stream);
-    var contentHash = Convert.ToHexStringLower(hashBytes);
-    stream.Position = 0;
-
-    // If file hasn't changed at all, short-circuit
-    if (existingSource.ContentHash == contentHash)
-        return Results.Ok(new { message = "File identical to current version. No update needed.", source_id = sourceId });
-
-    // Store the updated file
-    var storageKey = $"curriculum/{existingSource.CurriculumType}/{existingSource.Grade}/{existingSource.Subject}/{Guid.NewGuid()}{ext}";
-    var localPath = Path.Combine(Directory.GetCurrentDirectory(), "storage", storageKey);
-    Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-    await using (var fs = File.Create(localPath))
-    {
-        await stream.CopyToAsync(fs);
-    }
-
-    // Collect existing lesson hashes for delta comparison (sent to ingestion worker)
-    var existingLessons = await db.Lessons
-        .Where(l => l.StructureId == (db.CurriculumStructures
-            .Where(s => s.SourceId == sourceId)
-            .OrderByDescending(s => s.ExtractedAt)
-            .Select(s => s.StructureId)
-            .FirstOrDefault()))
-        .Select(l => new { l.LessonId, l.Path, l.ContentHash })
-        .ToListAsync();
-
-    // Mark existing source as replaced
-    existingSource.MarkReplaced();
-
-    // Create a new CurriculumSource for the updated file
-    var newSource = Muallimi.Domain.Curriculum.CurriculumSource.Create(
-        existingSource.CurriculumType,
-        existingSource.Grade,
-        existingSource.Subject,
-        existingSource.AcademicYear,
-        existingSource.TutorLanguage,
-        format,
-        storageKey,
-        contentHash,
-        actor,
-        originalFileName: file.FileName);
-
-    var job = Muallimi.Domain.Content.IngestionJob.Create(newSource.SourceId, correlationId);
-
-    db.CurriculumSources.Add(newSource);
-    db.IngestionJobs.Add(job);
-
-    // Write change log entries for the update
-    foreach (var lesson in existingLessons)
-    {
-        db.ChangeLogEntries.Add(Muallimi.Domain.Curriculum.ChangeLogEntry.Create(
-            lesson.LessonId,
-            Muallimi.Domain.Shared.ChangeEventType.LessonUpdated,
-            actor,
-            $"Source replaced: new version uploaded",
-            correlationId));
-    }
-
-    await db.SaveChangesAsync();
-
-    audit.Emit(new AuditEvent
-    {
-        EventCategory = "curriculum",
-        Action = "source-updated",
-        TargetType = "CurriculumSource",
-        TargetId = newSource.SourceId.ToString(),
-        ActorId = actor,
-        TenantId = httpContext.Items["TenantId"]?.ToString() ?? "local",
-        Outcome = "succeeded",
-        CorrelationId = correlationId,
-        Reason = $"Replaced source {sourceId}"
-    });
-
-    return Results.Created($"/admin/curriculum/jobs/{job.JobId}", new
-    {
-        previous_source_id = sourceId,
-        new_source_id = newSource.SourceId,
-        job_id = job.JobId,
-        status = job.Status.ToString(),
-        correlation_id = correlationId,
-        existing_lessons = existingLessons.Select(l => new
-        {
-            lesson_id = l.LessonId,
-            path = l.Path,
-            content_hash = l.ContentHash
-        }),
-        delta_comparison = "pending"
-    });
-})
-.WithName("UpdateCurriculumSource")
-.WithTags("Curriculum")
-.DisableAntiforgery();
+// ── US5: Invalidation Endpoint ──
+//
+// The POST /admin/curriculum/{sourceId}/update endpoint (delta re-upload) was
+// removed for the MVP stage-separated flow. To replace a botched curriculum,
+// admins delete the existing source from the Documents page and upload a
+// fresh copy. A re-introduced "update in place" workflow will land later as a
+// per-document action, not as a parallel upload mode.
 
 // T107: PATCH /admin/content/{assetId}/invalidate — manually invalidate a live asset
 app.MapMethods("/admin/content/{assetId:guid}/invalidate", new[] { "PATCH" }, async (
@@ -2394,18 +2604,28 @@ app.Run();
 
 // ── Request DTOs for internal endpoints ──
 
+record StructureUpdatePayload(
+    [property: System.Text.Json.Serialization.JsonPropertyName("nodes")] string Nodes);
+
 record IngestionJobStatusUpdate(
     [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
     [property: System.Text.Json.Serialization.JsonPropertyName("stages")] object[]? Stages,
     [property: System.Text.Json.Serialization.JsonPropertyName("error_reason")] string? ErrorReason,
-    [property: System.Text.Json.Serialization.JsonPropertyName("correlation_id")] string? CorrelationId);
+    [property: System.Text.Json.Serialization.JsonPropertyName("correlation_id")] string? CorrelationId,
+    // True when the worker is processing an MVP extract-only job. On completion
+    // the source is parked in SourceStatus.Extracted instead of advancing all
+    // the way to Indexed, since chunk + embed are deferred to a later trigger.
+    [property: System.Text.Json.Serialization.JsonPropertyName("extract_only")] bool ExtractOnly = false);
 
 record IngestionResultPayload(
     [property: System.Text.Json.Serialization.JsonPropertyName("source_id")] Guid SourceId,
     [property: System.Text.Json.Serialization.JsonPropertyName("job_id")] Guid JobId,
     [property: System.Text.Json.Serialization.JsonPropertyName("correlation_id")] string CorrelationId,
     [property: System.Text.Json.Serialization.JsonPropertyName("structure_nodes")] string StructureNodes,
-    [property: System.Text.Json.Serialization.JsonPropertyName("lessons")] List<IngestionLessonPayload> Lessons);
+    [property: System.Text.Json.Serialization.JsonPropertyName("lessons")] List<IngestionLessonPayload> Lessons,
+    // When true the payload represents an MVP extract-only result: structure
+    // tree + lesson skeletons only, no chunks, no embeddings.
+    [property: System.Text.Json.Serialization.JsonPropertyName("extract_only")] bool ExtractOnly = false);
 
 record IngestionLessonPayload(
     [property: System.Text.Json.Serialization.JsonPropertyName("title")] string Title,

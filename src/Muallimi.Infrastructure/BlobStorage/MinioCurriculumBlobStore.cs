@@ -42,6 +42,28 @@ public sealed class MinioCurriculumBlobStore : ICurriculumBlobStore
         return objectKey;
     }
 
+    public async Task<BlobDownloadResult> DownloadAsync(string objectKey, CancellationToken ct = default)
+    {
+        // MinIO's GetObjectAsync streams into a delegate; we copy into a
+        // MemoryStream so callers can read from the start (PDFs typically
+        // fit comfortably in memory for our admin preview use case).
+        var stat = await _client.StatObjectAsync(
+            new StatObjectArgs().WithBucket(BucketName).WithObject(objectKey),
+            ct);
+
+        var ms = new MemoryStream();
+        var args = new GetObjectArgs()
+            .WithBucket(BucketName)
+            .WithObject(objectKey)
+            .WithCallbackStream((s, c) => s.CopyToAsync(ms, c));
+
+        await _client.GetObjectAsync(args, ct);
+        ms.Position = 0;
+
+        var contentType = string.IsNullOrWhiteSpace(stat.ContentType) ? "application/octet-stream" : stat.ContentType;
+        return new BlobDownloadResult(ms, contentType, ms.Length);
+    }
+
     public async Task DeleteAsync(string objectKey, CancellationToken ct = default)
     {
         try

@@ -17,7 +17,12 @@ public sealed record IngestionMessage(
     string AcademicYear,
     string FileFormat,
     string ContentHash,
-    string CorrelationId);
+    string CorrelationId,
+    // When true the worker runs the Claude structure extractor only and
+    // stops before chunking + embedding. This is the path used by the
+    // MVP stage-separated flow where extraction is a manually triggered
+    // step. False (legacy default) keeps the original end-to-end pipeline.
+    bool ExtractOnly = false);
 
 public interface IIngestionJobPublisher
 {
