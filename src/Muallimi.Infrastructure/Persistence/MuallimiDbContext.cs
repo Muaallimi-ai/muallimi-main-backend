@@ -320,9 +320,23 @@ public class MuallimiDbContext : DbContext
             e.Property(x => x.ProviderKey).HasColumnName("provider_key").HasMaxLength(32);
             e.Property(x => x.ModelName).HasColumnName("model_name").HasMaxLength(128);
             e.Property(x => x.Dim).HasColumnName("dim");
-            e.Property(x => x.VoyageEmbedding).HasColumnName("voyage_embedding").HasColumnType("vector(1024)");
-            e.Property(x => x.OpenAiEmbedding).HasColumnName("openai_embedding").HasColumnType("vector(3072)");
-            e.Property(x => x.LocalEmbedding).HasColumnName("local_embedding").HasColumnType("vector(384)");
+            // pgvector columns only exist on Npgsql. The in-memory provider
+            // used by the test suite cannot map `Vector` at all and throws
+            // during model validation, which takes down every test that
+            // builds a DbContext — not just curriculum ones.
+            if (Database.IsNpgsql())
+            {
+                e.Property(x => x.VoyageEmbedding).HasColumnName("voyage_embedding").HasColumnType("vector(1024)");
+                e.Property(x => x.OpenAiEmbedding).HasColumnName("openai_embedding").HasColumnType("vector(3072)");
+                e.Property(x => x.LocalEmbedding).HasColumnName("local_embedding").HasColumnType("vector(384)");
+            }
+            else
+            {
+                e.Ignore(x => x.VoyageEmbedding);
+                e.Ignore(x => x.OpenAiEmbedding);
+                e.Ignore(x => x.LocalEmbedding);
+            }
+
             e.Property(x => x.EmbeddedAt).HasColumnName("embedded_at");
             e.HasIndex(x => x.SourceId).HasDatabaseName("ix_curriculum_node_embeddings_source_id");
         });
