@@ -481,7 +481,17 @@ builder.Services.AddHostedService<Muallimi.Api.Observability.HealthChecks.Health
 
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Nested request records share short names across modules (two
+    // `CreateRequest` types, for example), and Swashbuckle's default
+    // schemaId is the short name — the collision made
+    // /swagger/v1/swagger.json return 500. Qualify with the declaring
+    // type so sibling modules can keep naming their records alike.
+    options.CustomSchemaIds(type => type.DeclaringType is null
+        ? type.Name
+        : $"{type.DeclaringType.Name}.{type.Name}");
+});
 
 // CORS (dev: allow the frontend on :3000)
 builder.Services.AddCors(options =>
