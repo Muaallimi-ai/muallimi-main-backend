@@ -81,6 +81,20 @@ services:
       Mailpit__SmtpHost: mailpit
       Mailpit__SmtpPort: "1025"
       Mailpit__FromAddress: noreply@muallimi.local
+      # ── Stage 7 (Curriculum Content Ingestion) ──
+      # Anthropic key used by the enrichment service (summary + concept keywords)
+      # on node approval. The default provider is the local e5-small sidecar,
+      # so a credential-free local stack still produces real vectors. Set
+      # Embedding__Provider to voyage/openai (with the matching key) for cloud,
+      # or to "null" to skip embedding entirely — in every case a failed embed
+      # is logged and the approval event still fires.
+      Anthropic__ApiKey: ${Anthropic__ApiKey:-}
+      Anthropic__Model: ${Anthropic__CompletionModel:-claude-sonnet-4-6}
+      Anthropic__BaseUrl: ${Anthropic__BaseUrl:-https://api.anthropic.com}
+      Embedding__Provider: ${Embedding__Provider:-local}
+      Embedding__Local__Endpoint: ${Embedding__Local__Endpoint:-http://embedding-sidecar:8080/embeddings}
+      Embedding__Voyage__ApiKey: ${Embedding__Voyage__ApiKey:-}
+      Embedding__OpenAI__ApiKey: ${Embedding__OpenAI__ApiKey:-}
       SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-super@muallimi.local}
       SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:-Muallimi@Admin2024!}
       SUPER_ADMIN_ROLES: ${SUPER_ADMIN_ROLES:-super-admin,platform-operator}

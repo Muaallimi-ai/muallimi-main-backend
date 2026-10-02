@@ -52,7 +52,12 @@ public class MuallimiDbContext : DbContext
 
     // Curriculum
     public DbSet<CurriculumSource> CurriculumSources => Set<CurriculumSource>();
+    public DbSet<CurriculumNodeRetrievalOverride> CurriculumNodeRetrievalOverrides => Set<CurriculumNodeRetrievalOverride>();
+    public DbSet<CurriculumNodeEmbedding> CurriculumNodeEmbeddings => Set<CurriculumNodeEmbedding>();
+    public DbSet<Phase1DownstreamEvent> Phase1DownstreamEvents => Set<Phase1DownstreamEvent>();
     public DbSet<CurriculumStructure> CurriculumStructures => Set<CurriculumStructure>();
+    public DbSet<CurriculumNodeContent> CurriculumNodeContents => Set<CurriculumNodeContent>();
+    public DbSet<CurriculumNodeContentReport> CurriculumNodeContentReports => Set<CurriculumNodeContentReport>();
     public DbSet<Lesson> Lessons => Set<Lesson>();
     public DbSet<ContentChunk> ContentChunks => Set<ContentChunk>();
     public DbSet<QaCacheEntry> QaCacheEntries => Set<QaCacheEntry>();
@@ -203,6 +208,27 @@ public class MuallimiDbContext : DbContext
             e.Property(x => x.UploadedAt).HasColumnName("uploaded_at");
             e.Property(x => x.ContentHash).HasColumnName("content_hash");
             e.Property(x => x.Status).HasColumnName("status").HasConversion<string>();
+            // Stage 4 / D9 — prompt registry stamping. Nullable because
+            // pre-Stage-4 rows have no prompt identity recorded.
+            e.Property(x => x.PromptKey).HasColumnName("prompt_key").IsRequired(false);
+            e.Property(x => x.PromptVersion).HasColumnName("prompt_version").IsRequired(false);
+            e.Property(x => x.PromptSha).HasColumnName("prompt_sha").IsRequired(false);
+        });
+
+        // ── CurriculumNodeRetrievalOverride (Stage 6) ──
+        // One row per node whose reviewer flipped the retrieval class away
+        // from the classifier's system value. Absence = no override, use the
+        // system value from the tree JSONB.
+        modelBuilder.Entity<CurriculumNodeRetrievalOverride>(e =>
+        {
+            e.ToTable("curriculum_node_retrieval_overrides");
+            e.HasKey(x => x.NodeId);
+            e.Property(x => x.NodeId).HasColumnName("node_id");
+            e.Property(x => x.SourceId).HasColumnName("source_id");
+            e.Property(x => x.RetrievalClass).HasColumnName("retrieval_class").HasConversion<string>();
+            e.Property(x => x.OverriddenByUserId).HasColumnName("overridden_by_user_id");
+            e.Property(x => x.OverriddenAt).HasColumnName("overridden_at");
+            e.HasIndex(x => x.SourceId);
         });
 
         // ── CurriculumStructure ──
@@ -218,6 +244,107 @@ public class MuallimiDbContext : DbContext
             e.HasOne(x => x.Source)
                 .WithMany()
                 .HasForeignKey(x => x.SourceId);
+        });
+
+        // ── CurriculumNodeContent (Phase A Step 2) ──
+        // One row per node in the structure tree. Verbatim markdown + image
+        // description fetched lazily on admin click. Cascade-deleted when the
+        // owning source goes away. NodeId is the GUID assigned to the node
+        // inside CurriculumStructure.Nodes JSON at extraction time — no FK to
+        // the JSON, but SourceId carries a real FK for cascade semantics.
+        // Status enum tracks the fetch lifecycle (Fetching / Ready / Failed)
+        // so the frontend can render the right surface from one payload.
+        modelBuilder.Entity<CurriculumNodeContent>(e =>
+        {
+            e.ToTable("curriculum_node_contents");
+            e.HasKey(x => x.NodeId);
+            e.Property(x => x.NodeId).HasColumnName("node_id");
+            e.Property(x => x.SourceId).HasColumnName("source_id");
+            e.Property(x => x.Status).HasColumnName("status").HasConversion<string>();
+            e.Property(x => x.Markdown).HasColumnName("markdown");
+            e.Property(x => x.ImageDescription).HasColumnName("image_description");
+            e.Property(x => x.ContentHash).HasColumnName("content_hash");
+            e.Property(x => x.ErrorReason).HasColumnName("error_reason");
+            e.Property(x => x.RequestedAt).HasColumnName("requested_at");
+            e.Property(x => x.FetchedAt).HasColumnName("fetched_at");
+            e.Property(x => x.ModelVersion).HasColumnName("model_version");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.IsApproved).HasColumnName("is_approved");
+            e.Property(x => x.ApprovedAt).HasColumnName("approved_at");
+            e.Property(x => x.ApprovedByUserId).HasColumnName("approved_by_user_id");
+
+            e.HasIndex(x => x.SourceId).HasDatabaseName("ix_curriculum_node_contents_source_id");
+
+            e.HasOne(x => x.Source)
+                .WithMany()
+                .HasForeignKey(x => x.SourceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── CurriculumNodeContentReport ──
+        // Admin-submitted "extraction looks wrong" feedback, tied to the
+        // specific ContentHash that was visible at the time of the report so
+        // a later Re-fetch doesn't silently make a complaint look resolved.
+        modelBuilder.Entity<CurriculumNodeContentReport>(e =>
+        {
+            e.ToTable("curriculum_node_content_reports");
+            e.HasKey(x => x.ReportId);
+            e.Property(x => x.ReportId).HasColumnName("report_id");
+            e.Property(x => x.NodeId).HasColumnName("node_id");
+            e.Property(x => x.SourceId).HasColumnName("source_id");
+            e.Property(x => x.ContentHash).HasColumnName("content_hash");
+            e.Property(x => x.Comment).HasColumnName("comment");
+            e.Property(x => x.ReportedAt).HasColumnName("reported_at");
+            e.Property(x => x.ReportedByUserId).HasColumnName("reported_by_user_id");
+
+            e.HasIndex(x => x.NodeId).HasDatabaseName("ix_curriculum_node_content_reports_node_id");
+            e.HasIndex(x => x.SourceId).HasDatabaseName("ix_curriculum_node_content_reports_source_id");
+        });
+
+        // ── CurriculumNodeEmbedding (Stage 7) ──
+        // One row per teachable node, per source. Voyage + OpenAI columns are
+        // both nullable so a single row can hold whichever provider(s) have
+        // embedded this node; the active-provider config decides which column
+        // gets populated on approval. EmbedBodySha256 lets us detect stale
+        // embeddings when the underlying markdown or enrichment changes.
+        modelBuilder.Entity<CurriculumNodeEmbedding>(e =>
+        {
+            e.ToTable("curriculum_node_embeddings");
+            e.HasKey(x => x.NodeId);
+            e.Property(x => x.NodeId).HasColumnName("node_id");
+            e.Property(x => x.SourceId).HasColumnName("source_id");
+            e.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(64);
+            e.Property(x => x.Language).HasColumnName("language").HasMaxLength(16);
+            e.Property(x => x.RetrievalClass).HasColumnName("retrieval_class").HasMaxLength(32);
+            e.Property(x => x.EmbedBodySha256).HasColumnName("embed_body_sha256").HasMaxLength(64);
+            e.Property(x => x.ProviderKey).HasColumnName("provider_key").HasMaxLength(32);
+            e.Property(x => x.ModelName).HasColumnName("model_name").HasMaxLength(128);
+            e.Property(x => x.Dim).HasColumnName("dim");
+            e.Property(x => x.VoyageEmbedding).HasColumnName("voyage_embedding").HasColumnType("vector(1024)");
+            e.Property(x => x.OpenAiEmbedding).HasColumnName("openai_embedding").HasColumnType("vector(3072)");
+            e.Property(x => x.LocalEmbedding).HasColumnName("local_embedding").HasColumnType("vector(384)");
+            e.Property(x => x.EmbeddedAt).HasColumnName("embedded_at");
+            e.HasIndex(x => x.SourceId).HasDatabaseName("ix_curriculum_node_embeddings_source_id");
+        });
+
+        // ── Phase1DownstreamEvent (Stage 7) ──
+        // Outbox for curriculum-content-ingestion downstream events. Mirrors
+        // the Phase 4/5/6 outbox pattern. No TenantId — curriculum content is
+        // platform-global at ingestion time; tenants consume it downstream via
+        // the retrieval API. First event kind: `curriculum.node.approved`.
+        modelBuilder.Entity<Phase1DownstreamEvent>(e =>
+        {
+            e.ToTable("phase1_downstream_events");
+            e.HasKey(x => x.Phase1DownstreamEventId);
+            e.Property(x => x.Phase1DownstreamEventId).HasColumnName("phase1_downstream_event_id");
+            e.Property(x => x.EventKind).HasColumnName("event_kind").HasMaxLength(64);
+            e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id").HasMaxLength(64);
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
+            e.Property(x => x.DeliveryState).HasColumnName("delivery_state").HasMaxLength(16);
+            e.Property(x => x.DispatchAttempts).HasColumnName("dispatch_attempts");
+            e.HasIndex(x => new { x.DeliveryState, x.OccurredAt }).HasDatabaseName("ix_phase1_downstream_events_state_time");
         });
 
         // ── Lesson ──

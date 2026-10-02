@@ -9,6 +9,7 @@ WORKDIR /src
 COPY Muallimi.MainBackend.sln ./
 COPY src/ ./src/
 COPY tests/ ./tests/
+COPY prompts/ ./prompts/
 
 RUN dotnet restore Muallimi.MainBackend.sln
 RUN dotnet publish src/Muallimi.Api/Muallimi.Api.csproj \
@@ -24,6 +25,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .
+COPY --from=build /src/prompts /app/prompts
 
 EXPOSE 5063
 ENV ASPNETCORE_URLS=http://+:5063

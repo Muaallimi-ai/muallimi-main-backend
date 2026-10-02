@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muallimi.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace Muallimi.Infrastructure.Migrations
 {
     [DbContext(typeof(MuallimiDbContext))]
-    partial class MuallimiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260808112211_AddCurriculumNodeEmbeddingsAndPhase1Outbox")]
+    partial class AddCurriculumNodeEmbeddingsAndPhase1Outbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -839,10 +842,6 @@ namespace Muallimi.Infrastructure.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasColumnName("language");
-
-                    b.Property<Vector>("LocalEmbedding")
-                        .HasColumnType("vector(384)")
-                        .HasColumnName("local_embedding");
 
                     b.Property<string>("ModelName")
                         .IsRequired()

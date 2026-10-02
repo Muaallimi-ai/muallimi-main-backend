@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muallimi.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace Muallimi.Infrastructure.Migrations
 {
     [DbContext(typeof(MuallimiDbContext))]
-    partial class MuallimiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260807141651_AddCurriculumNodeRetrievalOverrides")]
+    partial class AddCurriculumNodeRetrievalOverrides
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -813,81 +816,6 @@ namespace Muallimi.Infrastructure.Migrations
                     b.ToTable("curriculum_node_content_reports", (string)null);
                 });
 
-            modelBuilder.Entity("Muallimi.Domain.Curriculum.CurriculumNodeEmbedding", b =>
-                {
-                    b.Property<Guid>("NodeId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("node_id");
-
-                    b.Property<int>("Dim")
-                        .HasColumnType("integer")
-                        .HasColumnName("dim");
-
-                    b.Property<string>("EmbedBodySha256")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("embed_body_sha256");
-
-                    b.Property<DateTime>("EmbeddedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("embedded_at");
-
-                    b.Property<string>("Language")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("language");
-
-                    b.Property<Vector>("LocalEmbedding")
-                        .HasColumnType("vector(384)")
-                        .HasColumnName("local_embedding");
-
-                    b.Property<string>("ModelName")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("model_name");
-
-                    b.Property<Vector>("OpenAiEmbedding")
-                        .HasColumnType("vector(3072)")
-                        .HasColumnName("openai_embedding");
-
-                    b.Property<string>("ProviderKey")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("provider_key");
-
-                    b.Property<string>("RetrievalClass")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("retrieval_class");
-
-                    b.Property<Guid>("SourceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_id");
-
-                    b.Property<string>("Subject")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("subject");
-
-                    b.Property<Vector>("VoyageEmbedding")
-                        .HasColumnType("vector(1024)")
-                        .HasColumnName("voyage_embedding");
-
-                    b.HasKey("NodeId");
-
-                    b.HasIndex("SourceId")
-                        .HasDatabaseName("ix_curriculum_node_embeddings_source_id");
-
-                    b.ToTable("curriculum_node_embeddings", (string)null);
-                });
-
             modelBuilder.Entity("Muallimi.Domain.Curriculum.CurriculumNodeRetrievalOverride", b =>
                 {
                     b.Property<Guid>("NodeId")
@@ -1088,56 +1016,6 @@ namespace Muallimi.Infrastructure.Migrations
                     b.HasIndex("StructureId");
 
                     b.ToTable("lessons", (string)null);
-                });
-
-            modelBuilder.Entity("Muallimi.Domain.Curriculum.Phase1DownstreamEvent", b =>
-                {
-                    b.Property<Guid>("Phase1DownstreamEventId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("phase1_downstream_event_id");
-
-                    b.Property<string>("CorrelationId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("correlation_id");
-
-                    b.Property<string>("DeliveryState")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("delivery_state");
-
-                    b.Property<int>("DispatchAttempts")
-                        .HasColumnType("integer")
-                        .HasColumnName("dispatch_attempts");
-
-                    b.Property<DateTime?>("DispatchedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("dispatched_at");
-
-                    b.Property<string>("EventKind")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("event_kind");
-
-                    b.Property<DateTime>("OccurredAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("occurred_at");
-
-                    b.Property<string>("Payload")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("payload");
-
-                    b.HasKey("Phase1DownstreamEventId");
-
-                    b.HasIndex("DeliveryState", "OccurredAt")
-                        .HasDatabaseName("ix_phase1_downstream_events_state_time");
-
-                    b.ToTable("phase1_downstream_events", (string)null);
                 });
 
             modelBuilder.Entity("Muallimi.Domain.Curriculum.QaCacheEntry", b =>

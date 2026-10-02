@@ -85,6 +85,11 @@
     <Compile Include="..\integration\SchoolManagement\_lib\LicensingHarness.cs" LinkBase="integration\SchoolManagement\_lib" />
   </ItemGroup>
 
+  <!-- Phase 1 Stage 7 — curriculum content ingestion downstream events. -->
+  <ItemGroup>
+    <Compile Include="..\contract\CurriculumContent\DownstreamEvents\**\*.cs" LinkBase="contract\CurriculumContent\DownstreamEvents" />
+  </ItemGroup>
+
   <!-- Phase 5 Polish cross-cutting tests (T199–T208). -->
   <ItemGroup>
     <Compile Include="..\contract\SchoolManagement\DownstreamEvents\**\*.cs" LinkBase="contract\SchoolManagement\DownstreamEvents" />

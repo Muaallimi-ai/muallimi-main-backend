@@ -18,6 +18,13 @@ public class CurriculumSource
     public string ContentHash { get; private set; } = string.Empty;
     public SourceStatus Status { get; private set; }
 
+    // Prompt registry stamping (Stage 4 / D9). Nullable because sources
+    // uploaded before Stage 4 pre-date the registry; they'll be null until
+    // a re-extract runs them through the new path.
+    public string? PromptKey { get; private set; }
+    public string? PromptVersion { get; private set; }
+    public string? PromptSha { get; private set; }
+
     private CurriculumSource() { } // EF Core
 
     public static CurriculumSource Create(
@@ -136,5 +143,21 @@ public class CurriculumSource
         if (Status != SourceStatus.Indexed)
             throw new InvalidOperationException($"Cannot mark replaced from status '{Status}'. Must be '{SourceStatus.Indexed}'.");
         Status = SourceStatus.Replaced;
+    }
+
+    /// <summary>
+    /// Records which prompt version produced the current structure
+    /// extraction (D9). Called by the /internal/ingestion/results handler
+    /// when the worker reports back with prompt_key/version/sha in the
+    /// payload. Silent no-op if any field is missing so older workers
+    /// (pre-Stage 4) continue to succeed.
+    /// </summary>
+    public void StampPrompt(string? key, string? version, string? sha)
+    {
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(sha))
+            return;
+        PromptKey = key;
+        PromptVersion = version;
+        PromptSha = sha;
     }
 }

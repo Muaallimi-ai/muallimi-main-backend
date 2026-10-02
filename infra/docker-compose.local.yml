@@ -117,6 +117,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── Embeddings (Voyage / OpenAI equivalent) ────────────────────────
+  # multilingual-e5-small, 384 dim, weights baked into the image so a
+  # cold start needs no network. Arabic is in-domain for e5-multilingual.
+  embedding-sidecar:
+    build:
+      context: ./embedding-sidecar
+    image: muallimi-embedding-sidecar:local
+    container_name: muallimi-embedding-sidecar
+    ports:
+      - "9007:8080"
+    environment:
+      EMBEDDING_MODEL: intfloat/multilingual-e5-small
+      EMBEDDING_DIM: 384
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz/ready')"]
+      interval: 10s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
+
   # ─── Observability (Application Insights equivalent) ────────────────
   seq:
     image: datalust/seq:latest

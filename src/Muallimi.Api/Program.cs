@@ -3,6 +3,8 @@ using Muallimi.Api.AiOperations.AlertRuleEngine;
 using Muallimi.Api.AiOperations.MetricAggregation;
 using Muallimi.Api.Billing;
 using Muallimi.Api.Notifications.DeliveryTracking;
+using Muallimi.Domain.Curriculum;    // Brings ToWireString extension into scope (Stage 6).
+using System.Text.Json;               // Stage 7 approval endpoint reads page_refs from tree JSON.
 using Muallimi.Api.Notifications.ProductionProviderBindings;
 using Muallimi.Api.Notifications.RetryAndDeadLetter;
 using Muallimi.Api.Audit;
@@ -184,6 +186,10 @@ builder.Services.AddSingleton<Minio.IMinioClient>(sp =>
 });
 builder.Services.AddSingleton<ICurriculumBlobStore, MinioCurriculumBlobStore>();
 builder.Services.AddSingleton<IIngestionJobPublisher, RabbitMqIngestionJobPublisher>();
+// Phase A Step 2 — separate exchange for per-node content fetch so the two
+// streams have independent backpressure. Single producer in main-backend,
+// single consumer in the worker.
+builder.Services.AddSingleton<INodeContentJobPublisher, RabbitMqNodeContentJobPublisher>();
 
 // ── Phase 3 (T011, T013–T017): Student Experience facade services ──
 builder.Services.AddPhase3PlanGate();
@@ -219,6 +225,34 @@ builder.Services.AddPhase4ProgressIngestionDeadLetterStore();
 builder.Services.AddPhase4DownstreamEventOutbox();
 builder.Services.AddPhase4DownstreamEventEmitter();
 builder.Services.AddPhase4DownstreamEventDispatcher();
+
+// ── Stage 7 (Curriculum Content Ingestion — Phase 1) ──
+// Prompt registry (enrichment prompts), embedding provider abstraction,
+// Claude text client, enrichment + embedding services, phase1 outbox + dispatcher.
+builder.Services.AddSingleton<Muallimi.Api.Curriculum.Prompts.IPromptRegistry>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<Muallimi.Api.Curriculum.Prompts.FilePromptRegistry>>();
+    var config = sp.GetRequiredService<IConfiguration>();
+    var configured = config["PromptRegistry:RootPath"];
+    var candidates = new[]
+    {
+        configured,
+        Path.Combine(AppContext.BaseDirectory, "prompts"),
+        Path.Combine(Directory.GetCurrentDirectory(), "prompts"),
+        Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "prompts"),
+    };
+    var root = candidates.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && Directory.Exists(p))
+               ?? throw new DirectoryNotFoundException(
+                   "Prompt registry root not found. Set PromptRegistry:RootPath or place a prompts/ folder next to the binary.");
+    return new Muallimi.Api.Curriculum.Prompts.FilePromptRegistry(root, logger);
+});
+builder.Services.Configure<Muallimi.Api.Curriculum.Enrichment.ClaudeOptions>(builder.Configuration.GetSection("Anthropic"));
+builder.Services.AddHttpClient<Muallimi.Api.Curriculum.Enrichment.ClaudeTextClient>();
+builder.Services.AddScoped<Muallimi.Api.Curriculum.Enrichment.INodeEnrichmentService, Muallimi.Api.Curriculum.Enrichment.NodeEnrichmentService>();
+Muallimi.Api.Curriculum.Embeddings.EmbeddingProviderServiceCollectionExtensions.AddEmbeddingProvider(builder.Services, builder.Configuration);
+builder.Services.AddScoped<Muallimi.Api.Curriculum.Embeddings.INodeEmbeddingService, Muallimi.Api.Curriculum.Embeddings.NodeEmbeddingService>();
+Muallimi.Api.Curriculum.DownstreamEvents.Phase1DownstreamEventOutboxServiceCollectionExtensions.AddPhase1DownstreamEventOutbox(builder.Services);
+Muallimi.Api.Curriculum.DownstreamEvents.Phase1DownstreamEventDispatcherServiceCollectionExtensions.AddPhase1DownstreamEventDispatcher(builder.Services);
 builder.Services.AddPhase4ProgressIngestionWorker();
 builder.Services.AddPhase4Phase3EventConsumer();
 builder.Services.AddPhase4StudentProgressService();
@@ -960,6 +994,17 @@ app.MapPost("/admin/curriculum/sources/{sourceId:guid}/request-reextract", async
         await db.CurriculumStructures.Where(s => structureIds.Contains(s.StructureId)).ExecuteDeleteAsync(httpContext.RequestAborted);
     }
 
+    // Phase A Step 2 — drop per-node content + reports too. Re-extract
+    // assigns brand new node_ids, so every existing row would become an
+    // orphan keyed to a vanished GUID. Wipe them now; the admin will re-fetch
+    // any nodes they care about on the next review pass.
+    await db.CurriculumNodeContents
+        .Where(c => c.SourceId == sourceId)
+        .ExecuteDeleteAsync(httpContext.RequestAborted);
+    await db.CurriculumNodeContentReports
+        .Where(r => r.SourceId == sourceId)
+        .ExecuteDeleteAsync(httpContext.RequestAborted);
+
     await db.IngestionJobs.Where(j => j.SourceId == sourceId).ExecuteDeleteAsync(httpContext.RequestAborted);
     await db.SaveChangesAsync(httpContext.RequestAborted);
 
@@ -1191,6 +1236,443 @@ app.MapGet("/admin/curriculum/{sourceId:guid}/structure", async (Guid sourceId, 
 .WithName("GetCurriculumStructure")
 .WithTags("Curriculum");
 
+// ──────────────────────────────────────────────────────────────────────────
+// Phase A Step 2 — per-node content fetch
+//
+// Lazy: a node's body markdown is fetched the first time the admin clicks
+// it in the Review surface. The fetch endpoint upserts a Fetching row and
+// publishes a queue message; the GET endpoint returns whatever state the
+// row sits in so the frontend can render spinner / content / error from one
+// payload. Worker callbacks land on /internal/ingestion/node-content.
+// ──────────────────────────────────────────────────────────────────────────
+
+app.MapPost("/admin/curriculum/nodes/{nodeId:guid}/content/fetch", async (
+    Guid nodeId,
+    NodeContentFetchRequest request,
+    MuallimiDbContext db,
+    INodeContentJobPublisher publisher,
+    HttpContext httpContext) =>
+{
+    if (request.SourceId == Guid.Empty)
+        return Results.BadRequest(new { error = "source_id is required." });
+    if (string.IsNullOrWhiteSpace(request.Title))
+        return Results.BadRequest(new { error = "title is required." });
+    if (request.PageRefs is null || request.PageRefs.Length == 0)
+        return Results.BadRequest(new { error = "page_refs must include at least one page." });
+
+    var correlationId = httpContext.TraceIdentifier;
+
+    // Look up the source's subject + language so the worker can resolve the
+    // right prompt via the registry (Stage 4). If the caller supplied a
+    // TutorLanguage in the payload we prefer that (backwards compat), but
+    // subject ALWAYS comes from the source row — the client never overrides it.
+    var source = await db.CurriculumSources.FindAsync(request.SourceId);
+    if (source is null)
+        return Results.NotFound(new { error = $"source {request.SourceId} not found." });
+
+    var existing = await db.CurriculumNodeContents.FindAsync(nodeId);
+    if (existing is null)
+    {
+        var row = Muallimi.Domain.Curriculum.CurriculumNodeContent.BeginFetch(nodeId, request.SourceId, correlationId);
+        db.CurriculumNodeContents.Add(row);
+    }
+    else
+    {
+        existing.RestartFetch(correlationId);
+    }
+    await db.SaveChangesAsync();
+
+    await publisher.PublishAsync(new NodeContentMessage(
+        NodeId: nodeId,
+        SourceId: request.SourceId,
+        Title: request.Title,
+        PageRefs: request.PageRefs,
+        Subject: source.Subject.ToString(),
+        TutorLanguage: string.IsNullOrWhiteSpace(request.TutorLanguage)
+            ? source.TutorLanguage.ToString()
+            : request.TutorLanguage!,
+        CorrelationId: correlationId), httpContext.RequestAborted);
+
+    return Results.Accepted(value: new
+    {
+        node_id = nodeId,
+        status = Muallimi.Domain.Curriculum.NodeContentStatus.Fetching.ToString(),
+    });
+})
+.WithName("FetchNodeContent")
+.WithTags("Curriculum");
+
+app.MapGet("/admin/curriculum/nodes/{nodeId:guid}/content", async (
+    Guid nodeId, MuallimiDbContext db) =>
+{
+    var row = await db.CurriculumNodeContents.FindAsync(nodeId);
+    if (row is null)
+        return Results.NotFound(new { error = "No content row for this node yet." });
+
+    return Results.Ok(new
+    {
+        node_id = row.NodeId,
+        source_id = row.SourceId,
+        status = row.Status.ToString(),
+        markdown = row.Markdown,
+        image_description = row.ImageDescription,
+        content_hash = row.ContentHash,
+        error_reason = row.ErrorReason,
+        requested_at = row.RequestedAt,
+        fetched_at = row.FetchedAt,
+        model_version = row.ModelVersion,
+        correlation_id = row.CorrelationId,
+        is_approved = row.IsApproved,
+        approved_at = row.ApprovedAt,
+        approved_by_user_id = row.ApprovedByUserId,
+    });
+})
+.WithName("GetNodeContent")
+.WithTags("Curriculum");
+
+// Approve the node's content — locks the row, panel closes in the UI, the
+// tree row paints a green tick. Idempotent: re-approving a Ready row is a
+// no-op. Approving Fetching/Failed rows is rejected because there's nothing
+// settled to approve.
+app.MapPost("/admin/curriculum/nodes/{nodeId:guid}/content/approve", async (
+    Guid nodeId,
+    MuallimiDbContext db,
+    HttpContext httpContext,
+    Muallimi.Api.Curriculum.Enrichment.INodeEnrichmentService enrichment,
+    Muallimi.Api.Curriculum.Embeddings.INodeEmbeddingService embedding,
+    Muallimi.Api.Curriculum.DownstreamEvents.IPhase1DownstreamEventOutbox outbox,
+    ILoggerFactory logs) =>
+{
+    var log = logs.CreateLogger("ApproveNodeContent");
+    var row = await db.CurriculumNodeContents.FindAsync(nodeId);
+    if (row is null)
+        return Results.NotFound(new { error = "No content row for this node yet." });
+
+    try
+    {
+        // ApprovedByUserId stays null until the Identity module wires through.
+        row.Approve(null);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, current_status = row.Status.ToString() });
+    }
+
+    await db.SaveChangesAsync();
+
+    var source = await db.CurriculumSources.FindAsync(row.SourceId);
+    var effectiveClass = "structural";
+    var systemClass = "structural";
+    var lookup = source is null
+        ? null
+        : Muallimi.Api.Curriculum.Enrichment.NodeEnrichmentPatcher.FindNode(
+            (await db.CurriculumStructures.FirstOrDefaultAsync(s => s.SourceId == source.SourceId))?.Nodes ?? "[]",
+            nodeId);
+    if (lookup is not null)
+    {
+        systemClass = lookup.Node["system_retrieval_class"]?.GetValue<string>() ?? "structural";
+        var overrideRow = await db.CurriculumNodeRetrievalOverrides.FindAsync(nodeId);
+        effectiveClass = overrideRow is not null ? overrideRow.RetrievalClass.ToWireString() : systemClass;
+    }
+
+    Muallimi.Api.Curriculum.Enrichment.EnrichmentResult? enrichmentResult = null;
+    Muallimi.Api.Curriculum.Embeddings.NodeEmbeddingResult? embeddingResult = null;
+
+    if (effectiveClass == "teachable")
+    {
+        try
+        {
+            enrichmentResult = await enrichment.EnrichNodeAsync(nodeId, httpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Enrichment failed for node {NodeId}; continuing with embedding + event.", nodeId);
+        }
+
+        try
+        {
+            embeddingResult = await embedding.EmbedNodeAsync(nodeId, httpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Embedding failed for node {NodeId}; event will still fire.", nodeId);
+        }
+    }
+
+    var correlationId = httpContext.TraceIdentifier ?? Guid.NewGuid().ToString();
+    var pageRef = lookup?.Node["source_refs"]?.ToJsonString();
+    await outbox.EnqueueAsync(
+        Muallimi.Api.Curriculum.DownstreamEvents.Phase1DownstreamEventKind.curriculum_node_approved,
+        payload: new
+        {
+            node_id = nodeId,
+            source_id = row.SourceId,
+            subject = source?.Subject.ToString(),
+            language = source?.TutorLanguage.ToString(),
+            retrieval_class = effectiveClass,
+            system_retrieval_class = systemClass,
+            page_refs = pageRef is null ? (JsonElement?)null : JsonDocument.Parse(pageRef).RootElement,
+            prompt_key = source?.PromptKey,
+            prompt_version = source?.PromptVersion,
+            prompt_sha256 = source?.PromptSha,
+            embed_body_sha256 = embeddingResult?.EmbedBodySha256,
+            embed_provider = embeddingResult is { Skipped: false } ? embeddingResult.ProviderKey : null,
+            embed_model = embeddingResult is { Skipped: false } ? embeddingResult.ModelName : null,
+            embed_dim = embeddingResult is { Skipped: false } ? (int?)embeddingResult.Dim : null,
+            approved_at = row.ApprovedAt,
+        },
+        correlationId: correlationId,
+        ct: httpContext.RequestAborted);
+
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new
+    {
+        node_id = row.NodeId,
+        is_approved = row.IsApproved,
+        approved_at = row.ApprovedAt,
+        retrieval_class = effectiveClass,
+        enriched = enrichmentResult is not null,
+        embedded = embeddingResult is { Skipped: false },
+        embed_provider = embeddingResult?.ProviderKey,
+        embed_body_sha256 = embeddingResult?.EmbedBodySha256,
+    });
+})
+.WithName("ApproveNodeContent")
+.WithTags("Curriculum");
+
+// List of node_ids whose content row is approved for this source. The
+// Review tree calls this on source-select to paint a green tick on each
+// approved row without round-tripping per node. Returned as a flat array
+// of GUID strings — small even for a 500-node book.
+app.MapGet("/admin/curriculum/sources/{sourceId:guid}/approved-nodes", async (
+    Guid sourceId, MuallimiDbContext db) =>
+{
+    var ids = await db.CurriculumNodeContents
+        .Where(c => c.SourceId == sourceId && c.IsApproved)
+        .Select(c => c.NodeId)
+        .ToListAsync();
+    return Results.Ok(new { source_id = sourceId, approved_node_ids = ids });
+})
+.WithName("ListApprovedNodesForSource")
+.WithTags("Curriculum");
+
+// ── Stage 6: retrieval-class override & bulk hydration ──
+// Reviewer flips a node's retrieval class from the classifier's system
+// value. Absence of a row in curriculum_node_retrieval_overrides means
+// "use system_retrieval_class from the tree JSONB unchanged."
+app.MapPut("/admin/curriculum/nodes/{nodeId:guid}/retrieval-class", async (
+    Guid nodeId,
+    RetrievalClassOverrideRequest request,
+    MuallimiDbContext db,
+    HttpContext httpContext) =>
+{
+    if (request.SourceId == Guid.Empty)
+        return Results.BadRequest(new { error = "source_id is required." });
+
+    var parsed = Muallimi.Domain.Curriculum.RetrievalClassClassifier.Parse(request.RetrievalClass);
+    var actor = httpContext.Items["ActorUserId"]?.ToString()
+        ?? httpContext.Items["ActorRole"]?.ToString()
+        ?? "curriculum-admin";
+
+    var existing = await db.CurriculumNodeRetrievalOverrides.FindAsync(nodeId);
+    if (existing is null)
+    {
+        db.CurriculumNodeRetrievalOverrides.Add(
+            Muallimi.Domain.Curriculum.CurriculumNodeRetrievalOverride.Create(
+                nodeId, request.SourceId, parsed, actor));
+    }
+    else
+    {
+        existing.UpdateClass(parsed, actor);
+    }
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new
+    {
+        node_id = nodeId,
+        source_id = request.SourceId,
+        retrieval_class = parsed.ToWireString(),
+        overridden = true,
+    });
+})
+.WithName("SetNodeRetrievalClassOverride")
+.WithTags("Curriculum");
+
+// Reset-to-auto: delete the override row, effective class reverts to
+// system_retrieval_class from the tree JSONB.
+app.MapDelete("/admin/curriculum/nodes/{nodeId:guid}/retrieval-class", async (
+    Guid nodeId, MuallimiDbContext db) =>
+{
+    var existing = await db.CurriculumNodeRetrievalOverrides.FindAsync(nodeId);
+    if (existing is null)
+        return Results.NoContent(); // already at system value
+
+    db.CurriculumNodeRetrievalOverrides.Remove(existing);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+})
+.WithName("ClearNodeRetrievalClassOverride")
+.WithTags("Curriculum");
+
+// Bulk hydration for the tree UI: returns { node_id → { system, effective, overridden } }
+// so the frontend can render color dots + pencil indicators in one round trip.
+app.MapGet("/admin/curriculum/sources/{sourceId:guid}/retrieval-classes", async (
+    Guid sourceId, MuallimiDbContext db) =>
+{
+    var structure = await db.CurriculumStructures
+        .Where(s => s.SourceId == sourceId)
+        .Select(s => new { s.Nodes })
+        .FirstOrDefaultAsync();
+    if (structure is null)
+        return Results.NotFound(new { error = "structure not found for source." });
+
+    var overrides = await db.CurriculumNodeRetrievalOverrides
+        .Where(o => o.SourceId == sourceId)
+        .ToDictionaryAsync(o => o.NodeId, o => o.RetrievalClass);
+
+    var systemByNode = new Dictionary<Guid, string>();
+    using (var doc = System.Text.Json.JsonDocument.Parse(structure.Nodes))
+    {
+        void Walk(System.Text.Json.JsonElement element)
+        {
+            if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                if (element.TryGetProperty("node_id", out var idProp)
+                    && Guid.TryParse(idProp.GetString(), out var nodeId))
+                {
+                    var systemClass = element.TryGetProperty("system_retrieval_class", out var scProp)
+                        ? (scProp.GetString() ?? "structural")
+                        : "structural";
+                    systemByNode[nodeId] = systemClass;
+                }
+                if (element.TryGetProperty("children", out var childrenProp)
+                    && childrenProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var child in childrenProp.EnumerateArray())
+                        Walk(child);
+                }
+            }
+            else if (element.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                    Walk(item);
+            }
+        }
+        Walk(doc.RootElement);
+    }
+
+    var result = systemByNode.Select(kv =>
+    {
+        var system = kv.Value;
+        string effective = system;
+        var overridden = false;
+        if (overrides.TryGetValue(kv.Key, out var overrideClass))
+        {
+            effective = overrideClass.ToWireString();
+            overridden = true;
+        }
+        return new
+        {
+            node_id = kv.Key,
+            system_retrieval_class = system,
+            retrieval_class = effective,
+            overridden,
+        };
+    }).ToArray();
+
+    return Results.Ok(new { source_id = sourceId, classes = result });
+})
+.WithName("GetRetrievalClassesForSource")
+.WithTags("Curriculum");
+
+// One-off backfill for sources extracted before Stage 6 shipped:
+// re-runs the classifier on the existing tree JSONB and stamps the result
+// into the tree in place. Idempotent (safe to re-run) and cheap
+// (no Claude calls). Restricted to a single source at a time to keep the
+// blast radius small; batch across sources by calling repeatedly.
+app.MapPost("/admin/curriculum/sources/{sourceId:guid}/backfill-retrieval-classes", async (
+    Guid sourceId, MuallimiDbContext db) =>
+{
+    var structure = await db.CurriculumStructures
+        .FirstOrDefaultAsync(s => s.SourceId == sourceId);
+    if (structure is null)
+        return Results.NotFound(new { error = "structure not found for source." });
+
+    var enriched = Muallimi.Domain.Curriculum.RetrievalClassTreeEnricher.EnrichJson(structure.Nodes);
+    structure.UpdateNodes(enriched);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { source_id = sourceId, backfilled = true });
+})
+.WithName("BackfillRetrievalClassesForSource")
+.WithTags("Curriculum");
+
+// Admin-submitted "the extraction for this node looks wrong" feedback.
+// Captures the comment against the current content_hash so a later Re-fetch
+// doesn't silently obscure which payload the complaint was about.
+app.MapPost("/admin/curriculum/nodes/{nodeId:guid}/content/reports", async (
+    Guid nodeId,
+    NodeContentReportRequest request,
+    MuallimiDbContext db,
+    HttpContext httpContext) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Comment))
+        return Results.BadRequest(new { error = "Comment is required." });
+
+    var row = await db.CurriculumNodeContents.FindAsync(nodeId);
+    if (row is null)
+        return Results.NotFound(new { error = "No content row for this node yet." });
+
+    var report = Muallimi.Domain.Curriculum.CurriculumNodeContentReport.Create(
+        nodeId: nodeId,
+        sourceId: row.SourceId,
+        contentHash: row.ContentHash ?? request.ContentHash ?? string.Empty,
+        comment: request.Comment.Trim(),
+        reporterUserId: null);
+    db.CurriculumNodeContentReports.Add(report);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/admin/curriculum/nodes/{nodeId}/content/reports/{report.ReportId}", new
+    {
+        report_id = report.ReportId,
+        node_id = report.NodeId,
+        reported_at = report.ReportedAt,
+    });
+})
+.WithName("ReportNodeContentError")
+.WithTags("Curriculum");
+
+// Worker callback — one endpoint, status field tells us success vs. failure.
+// Single call regardless of outcome keeps the worker pipeline simple.
+app.MapPost("/internal/ingestion/node-content", async (
+    NodeContentCallbackPayload payload, MuallimiDbContext db) =>
+{
+    var row = await db.CurriculumNodeContents.FindAsync(payload.NodeId);
+    if (row is null)
+        return Results.NotFound(new { error = "Node content row not found (was the row created via /content/fetch?)." });
+
+    if (string.Equals(payload.Status, "ready", StringComparison.OrdinalIgnoreCase))
+    {
+        if (string.IsNullOrWhiteSpace(payload.Markdown) || string.IsNullOrWhiteSpace(payload.ContentHash))
+            return Results.BadRequest(new { error = "Ready callback must include markdown and content_hash." });
+
+        row.CompleteFetch(payload.Markdown!, payload.ImageDescription, payload.ContentHash!, payload.ModelVersion ?? string.Empty);
+    }
+    else if (string.Equals(payload.Status, "failed", StringComparison.OrdinalIgnoreCase))
+    {
+        row.FailFetch(payload.ErrorReason ?? "Unknown error");
+    }
+    else
+    {
+        return Results.BadRequest(new { error = $"Unknown status '{payload.Status}' — expected 'ready' or 'failed'." });
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok();
+})
+.WithName("NodeContentCallback")
+.WithTags("Internal");
+
 // T029: GET lesson detail with chunks
 app.MapGet("/admin/curriculum/{sourceId:guid}/structure/{lessonId:guid}", async (
     Guid sourceId, Guid lessonId, MuallimiDbContext db) =>
@@ -1280,15 +1762,26 @@ app.MapPut("/internal/ingestion/jobs/{jobId:guid}/status", async (
 app.MapPost("/internal/ingestion/results", async (
     IngestionResultPayload payload, MuallimiDbContext db, AuditEventEmitter audit) =>
 {
+    // Stage 6 (D6): stamp `system_retrieval_class` onto every node in the
+    // tree based on its `node_type`. Immutable — reviewer overrides land in
+    // curriculum_node_retrieval_overrides, not here. Applied BEFORE persist
+    // so the stored JSONB carries the classifier's original verdict for
+    // analytics ("what did the classifier say pre-override?").
+    var enrichedNodes = Muallimi.Domain.Curriculum.RetrievalClassTreeEnricher.EnrichJson(payload.StructureNodes);
+
     // Create the curriculum structure
     var structure = Muallimi.Domain.Curriculum.CurriculumStructure.Create(
-        payload.SourceId, payload.StructureNodes);
+        payload.SourceId, enrichedNodes);
     db.CurriculumStructures.Add(structure);
 
     // Look up the source to get scope metadata
     var source = await db.CurriculumSources.FindAsync(payload.SourceId);
     if (source is null)
         return Results.NotFound(new { error = "Source not found." });
+
+    // Stamp the prompt identity used to produce this extraction (Stage 4/D9).
+    // Silent no-op if any field is missing so older worker builds keep working.
+    source.StampPrompt(payload.PromptKey, payload.PromptVersion, payload.PromptSha);
 
     // Create lessons (and chunks, when present). In the MVP extract-only path
     // payload.Lessons carries skeletons with no chunks — the chunks loop just
@@ -2625,7 +3118,13 @@ record IngestionResultPayload(
     [property: System.Text.Json.Serialization.JsonPropertyName("lessons")] List<IngestionLessonPayload> Lessons,
     // When true the payload represents an MVP extract-only result: structure
     // tree + lesson skeletons only, no chunks, no embeddings.
-    [property: System.Text.Json.Serialization.JsonPropertyName("extract_only")] bool ExtractOnly = false);
+    [property: System.Text.Json.Serialization.JsonPropertyName("extract_only")] bool ExtractOnly = false,
+    // Stage 4 / D9 — prompt registry identity stamped by the worker at
+    // extraction time. Nullable so pre-Stage-4 workers still deserialize;
+    // the endpoint records them on the source row only if all three arrive.
+    [property: System.Text.Json.Serialization.JsonPropertyName("prompt_key")] string? PromptKey = null,
+    [property: System.Text.Json.Serialization.JsonPropertyName("prompt_version")] string? PromptVersion = null,
+    [property: System.Text.Json.Serialization.JsonPropertyName("prompt_sha")] string? PromptSha = null);
 
 record IngestionLessonPayload(
     [property: System.Text.Json.Serialization.JsonPropertyName("title")] string Title,
@@ -2707,3 +3206,29 @@ record RequestEditRequest(string FixInstruction, string Stage);
 // ── US5 DTOs (Update & Invalidation) ──
 
 record InvalidateRequest(string Reason);
+
+// ── Phase A Step 2 (Per-node content fetch) DTOs ──
+
+record NodeContentFetchRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("source_id")] Guid SourceId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("title")] string Title,
+    [property: System.Text.Json.Serialization.JsonPropertyName("page_refs")] string[] PageRefs,
+    [property: System.Text.Json.Serialization.JsonPropertyName("tutor_language")] string? TutorLanguage);
+
+record NodeContentCallbackPayload(
+    [property: System.Text.Json.Serialization.JsonPropertyName("node_id")] Guid NodeId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
+    [property: System.Text.Json.Serialization.JsonPropertyName("markdown")] string? Markdown,
+    [property: System.Text.Json.Serialization.JsonPropertyName("image_description")] string? ImageDescription,
+    [property: System.Text.Json.Serialization.JsonPropertyName("content_hash")] string? ContentHash,
+    [property: System.Text.Json.Serialization.JsonPropertyName("model_version")] string? ModelVersion,
+    [property: System.Text.Json.Serialization.JsonPropertyName("error_reason")] string? ErrorReason);
+
+record NodeContentReportRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("content_hash")] string? ContentHash,
+    [property: System.Text.Json.Serialization.JsonPropertyName("comment")] string Comment);
+
+// ── Stage 6 (Retrieval-class override) DTO ──
+record RetrievalClassOverrideRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("source_id")] Guid SourceId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("retrieval_class")] string RetrievalClass);
