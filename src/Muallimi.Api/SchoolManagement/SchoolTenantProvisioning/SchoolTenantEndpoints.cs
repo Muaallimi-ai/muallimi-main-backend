@@ -20,6 +20,17 @@ public static class SchoolTenantEndpoints
 {
     public const string Route = "/api/operator/schools";
 
+    // An omitted `academic_calendar` deserialises to default(JsonElement),
+    // whose ValueKind is Undefined. Serializing that throws, so the field is
+    // normalised to an empty object before it reaches the service.
+    private static readonly JsonElement EmptyCalendar = ParseEmptyObject();
+
+    private static JsonElement ParseEmptyObject()
+    {
+        using var doc = JsonDocument.Parse("{}");
+        return doc.RootElement.Clone();
+    }
+
     public sealed record CreateSchoolRequest(
         string school_name_ar,
         string school_name_en,
@@ -27,7 +38,7 @@ public static class SchoolTenantEndpoints
         int grade_range_start,
         int grade_range_end,
         List<string>? subject_bindings,
-        JsonElement academic_calendar,
+        JsonElement? academic_calendar,
         string preferred_language);
 
     public static IEndpointRouteBuilder MapOperatorSchoolCreation(this IEndpointRouteBuilder routes)
@@ -65,7 +76,9 @@ public static class SchoolTenantEndpoints
                 GradeRangeStart: body.grade_range_start,
                 GradeRangeEnd: body.grade_range_end,
                 SubjectBindings: body.subject_bindings ?? new List<string>(),
-                AcademicCalendar: body.academic_calendar,
+                AcademicCalendar: body.academic_calendar is { ValueKind: not JsonValueKind.Undefined } cal
+                    ? cal
+                    : EmptyCalendar,
                 PreferredLanguage: string.IsNullOrWhiteSpace(body.preferred_language) ? "ar" : body.preferred_language,
                 CreatedByOperatorId: operatorActorId,
                 TenantId: tenantId),

@@ -72,9 +72,17 @@ public static class OperatorEndpoints
             .AsNoTracking()
             .Select(s => new { s.TenantId, s.SchoolNameAr, s.SchoolNameEn })
             .ToListAsync(ct);
-        var nameByTenant = schools.ToDictionary(
-            s => s.TenantId,
-            s => loc == "ar" ? s.SchoolNameAr : s.SchoolNameEn);
+        // A tenant can own more than one school, so TenantId is not a unique
+        // key here — ToDictionary on it threw once a second school existed.
+        // Pick the first non-blank name in a stable order for the label.
+        var nameByTenant = schools
+            .GroupBy(s => s.TenantId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(s => loc == "ar" ? s.SchoolNameAr : s.SchoolNameEn)
+                      .Where(n => !string.IsNullOrWhiteSpace(n))
+                      .OrderBy(n => n, StringComparer.Ordinal)
+                      .FirstOrDefault());
 
         var enriched = rows.Select(v => new
         {

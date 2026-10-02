@@ -112,8 +112,18 @@ public static class SchoolConfigEndpoints
 
     private static JsonElement DeserializeObject(string json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return default;
+        // Not default(JsonElement): its ValueKind is Undefined, which throws
+        // when the response is serialised.
+        if (string.IsNullOrWhiteSpace(json)) return EmptyObject;
         using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
+
+    private static readonly JsonElement EmptyObject = ParseEmptyObject();
+
+    private static JsonElement ParseEmptyObject()
+    {
+        using var doc = JsonDocument.Parse("{}");
         return doc.RootElement.Clone();
     }
 
