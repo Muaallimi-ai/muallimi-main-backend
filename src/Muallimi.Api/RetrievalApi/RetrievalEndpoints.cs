@@ -33,6 +33,11 @@ public static class RetrievalEndpoints
             // Propagate correlation ID in response header
             httpContext.Response.Headers["X-Correlation-Id"] = correlationId;
 
+            // `scope` is required — without this guard an omitted scope
+            // dereferenced to a NullReferenceException and surfaced as a 500.
+            if (request.Scope is null)
+                return Results.BadRequest(new { error = "scope is required (curriculum_type, grade, subject, tutor_language)." });
+
             // Parse scope enums
             if (!Enum.TryParse<CurriculumType>(request.Scope.CurriculumType, ignoreCase: true, out var ctEnum))
                 return Results.BadRequest(new { error = $"Invalid curriculum_type '{request.Scope.CurriculumType}'." });
