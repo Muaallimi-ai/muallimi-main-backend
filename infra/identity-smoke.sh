@@ -20,7 +20,7 @@
 # Usage:
 #   ./infra/identity-smoke.sh                       # run all steps
 #   STEP=IDS05 ./infra/identity-smoke.sh            # run a single step
-#   BASE_URL=http://localhost:5080 ./infra/identity-smoke.sh
+#   BASE_URL=http://localhost:5063 ./infra/identity-smoke.sh
 #   KNOWN_EMAIL=parent@example.com ./infra/identity-smoke.sh
 #
 # Exit codes:
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EVIDENCE_ROOT="${EVIDENCE_DIR:-${SCRIPT_DIR}/scripts/_evidence/identity}"
 mkdir -p "${EVIDENCE_ROOT}"
 
-BASE_URL=${BASE_URL:-http://localhost:5080}
+BASE_URL=${BASE_URL:-http://localhost:5063}
 KNOWN_EMAIL=${KNOWN_EMAIL:-parent@example.com}
 UNKNOWN_EMAIL=${UNKNOWN_EMAIL:-nobody-$(date +%s)@example.com}
 CHILD_ID=${CHILD_ID:-00000000-0000-0000-0000-00000000c111}

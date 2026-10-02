@@ -13,14 +13,14 @@
 # Usage:
 #   ./infra/phase6-smoke.sh              # run all steps
 #   STEP=us1 ./infra/phase6-smoke.sh     # run a single step only
-#   BASE_URL=http://localhost:5080 ./infra/phase6-smoke.sh
+#   BASE_URL=http://localhost:5063 ./infra/phase6-smoke.sh
 #
 # Exit codes:
 #   0   all steps passed
 #   >0  first failing step number — also written to _evidence/exit_code
 set -euo pipefail
 
-BASE_URL=${BASE_URL:-http://localhost:5080}
+BASE_URL=${BASE_URL:-http://localhost:5063}
 TENANT_ID=${TENANT_ID:-11111111-1111-1111-1111-111111111111}
 PARENT_ACTOR_ID=${PARENT_ACTOR_ID:-22222222-2222-2222-2222-222222222222}
 SCHOOL_TENANT_ID=${SCHOOL_TENANT_ID:-55555555-5555-5555-5555-555555555555}
@@ -44,6 +44,8 @@ PARENT_HEADERS=(
 OPERATOR_HEADERS=(
   -H "X-Operator-Actor-Id: $OPERATOR_ACTOR_ID"
   -H "X-Actor-Type: operator"
+  # AiOperationsAuthorizationFilter gates on X-Actor-Role, not X-Actor-Type.
+  -H "X-Actor-Role: operator"
   -H "X-Correlation-Id: $CORRELATION_ID"
   -H "Content-Type: application/json"
 )
@@ -81,14 +83,14 @@ expect_one_of() {
 }
 
 http_get() {
-  local url="$1"; shift
-  curl -sS -o "$EVIDENCE_DIR/$2.body" -w '%{http_code}' "${@:3}" "$url"
+  local url="$1" name="$2"; shift 2
+  curl -sS -o "$EVIDENCE_DIR/$name.body" -w '%{http_code}' "$@" "$url"
 }
 
 http_post() {
-  local url="$1" body="$2"; shift 2
-  curl -sS -o "$EVIDENCE_DIR/$2.body" -w '%{http_code}' \
-    -X POST -d "$body" "${@:3}" "$url"
+  local url="$1" body="$2" name="$3"; shift 3
+  curl -sS -o "$EVIDENCE_DIR/$name.body" -w '%{http_code}' \
+    -X POST -d "$body" "$@" "$url"
 }
 
 run_step() {
